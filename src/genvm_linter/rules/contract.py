@@ -146,7 +146,7 @@ class ContractClassRule(Rule):
             if not has_init:
                 results.append(self.create_result(
                     f"Contract class '{class_name}' is missing __init__ method",
-                    Severity.WARNING,
+                    Severity.ERROR,
                     line=class_line,
                     filename=filename,
                     suggestion='Add: def __init__(self, ...): pass'
