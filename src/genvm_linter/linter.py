@@ -13,7 +13,7 @@ from .rules.python_types import PythonTypeCheckRule, GenVMTypeStubRule
 
 
 class GenVMLinter:
-    """Main linter class for GenVM smart contracts."""
+    """Main linter class for GenVM intelligent contracts."""
     
     def __init__(self):
         """Initialize the linter with default rules."""

@@ -1,4 +1,4 @@
-"""GenVM Linter - A Python linter for GenLayer GenVM smart contracts."""
+"""GenVM Linter - A Python linter for GenLayer GenVM intelligent contracts."""
 
 __version__ = "0.1.0"
 __author__ = "GenLayer Labs"

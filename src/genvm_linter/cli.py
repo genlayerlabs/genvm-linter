@@ -76,7 +76,7 @@ def count_by_severity(results: List[ValidationResult]) -> dict:
 def main(paths: tuple, output_format: str, severity: Optional[str], 
          no_suggestions: bool, rules: tuple, exclude_rules: tuple, stats: bool) -> None:
     """
-    GenVM Linter - Lint GenLayer smart contracts.
+    GenVM Linter - Lint GenLayer intelligent contracts.
     
     PATHS can be files or directories. If no paths are provided, 
     the current directory is linted.

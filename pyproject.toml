@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "genvm-linter"
 version = "0.1.0"
-description = "A Python linter for GenLayer GenVM smart contracts"
+description = "A Python linter for GenLayer GenVM intelligent contracts"
 readme = "README.md"
 license = "MIT"
 authors = [

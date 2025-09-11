@@ -1,6 +1,6 @@
 # GenVM Linter
 
-A Python linter specifically designed for GenLayer GenVM smart contracts. This linter validates GenLayer intelligent contracts according to GenVM's type system and coding conventions.
+A Python linter specifically designed for GenLayer GenVM intelligent contracts. This linter validates GenLayer intelligent contracts according to GenVM's type system and coding conventions.
 
 ## Features
 
