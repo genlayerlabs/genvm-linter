@@ -60,5 +60,5 @@ env/
 # Project specific
 *.vsix
 test_*.py
-!tests/test_*.py
+!tests/**/test_*.py
 vscode-extension/
