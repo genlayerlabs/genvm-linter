@@ -2,28 +2,11 @@
 
 ## Overview
 
-The GenVM Linter is a comprehensive validation system for GenLayer intelligent contracts, consisting of three main components:
-1. **Python Linter Core** - Rule-based validation engine
-2. **MyPy Integration** - Python type checking
-3. **VS Code Extension** - IDE integration
+The GenVM Linter is a Python-based validation system for GenLayer intelligent contracts, providing comprehensive rule-based checking and integration with Python's type system.
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     VS Code Editor                          │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │              VS Code Extension (TypeScript)         │    │
-│  │  • extension.ts (entry point)                      │    │
-│  │  • diagnostics-provider.ts                         │    │
-│  │  • hover-provider.ts, autocomplete-provider.ts     │    │
-│  └──────────────┬────────────────┬────────────────────┘    │
-│                 │                │                          │
-│                 ▼                ▼                          │
-│         Spawns Process      JSON Communication              │
-└─────────────────┼────────────────┼─────────────────────────┘
-                  │                │
-                  ▼                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Python Linter (genvm-linter)                   │
 │  ┌────────────────────────────────────────────────────┐    │
@@ -49,314 +32,219 @@ The GenVM Linter is a comprehensive validation system for GenLayer intelligent c
 │  │  • contract.py - Structure validation              │    │
 │  │  • types.py - GenVM type system                    │    │
 │  │  • decorators.py - Method decorators               │    │
+│  │  • genvm_patterns.py - GenVM patterns              │    │
 │  │  • python_types.py - MyPy integration              │    │
-│  │  • genvm_patterns.py - API usage patterns          │    │
-│  └─────────────┬───────────────────────────────────────┘    │
-│                │                                            │
-│                ▼                                            │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │              MyPy Integration                       │    │
-│  │  • Runs MyPy programmatically                      │    │
-│  │  • Custom GenVM type stubs                         │    │
-│  │  • Python type validation                          │    │
 │  └────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Entry Points
+## Core Components
 
-### 1. CLI Entry Point (`src/genvm_linter/cli.py`)
+### 1. CLI Interface (`src/genvm_linter/cli.py`)
 
-The main command-line interface that users and the VS Code extension interact with:
+The main command-line interface that users and external tools interact with:
 
 ```python
-# Key function: main()
-@click.command()
-@click.argument('paths', nargs=-1, type=click.Path(exists=True))
-@click.option('--format', type=click.Choice(['text', 'json']), default='text')
-@click.option('--severity', type=click.Choice(['error', 'warning', 'info']))
-def main(paths, format, severity):
-    """Main CLI entry point"""
+def main(paths, output_format, severity, rules, exclude_rules, stats):
+    # Initialize linter with configuration
     linter = GenVMLinter()
-    results = []
 
+    # Filter rules based on CLI arguments
+    if rules:
+        linter.rules = [r for r in linter.rules if r.rule_id in rules]
+
+    # Lint specified paths
     for path in paths:
-        results.extend(linter.lint_file(path))
+        results = linter.lint_file(path)
 
-    if format == 'json':
+    # Format and output results (text or JSON)
+    if output_format == 'json':
         output_json(results)
     else:
         output_text(results)
 ```
 
-### 2. Python API Entry Point (`src/genvm_linter/linter.py`)
+### 2. Core Linter (`src/genvm_linter/linter.py`)
 
-The core linter class that manages all validation:
+The orchestration layer that manages all validation rules:
 
 ```python
 class GenVMLinter:
     def __init__(self):
-        # Initialize all validation rules
         self.rules = [
             MagicCommentRule(),
-            ImportRule(),
-            ContractClassRule(),
+            ImportsRule(),
+            ContractStructureRule(),
+            ConstructorRule(),
             DecoratorRule(),
-            TypeSystemRule(),
-            GenVMApiUsageRule(),
-            PythonTypeCheckRule(),  # MyPy integration
-            # ... more rules
+            StorageTypesRule(),
+            ReturnTypesRule(),
+            MyPyIntegrationRule()
         ]
 
     def lint_source(self, source_code: str) -> List[ValidationResult]:
-        # Parse AST and run all rules
         tree = ast.parse(source_code)
         results = []
 
         for rule in self.rules:
-            results.extend(rule.validate(tree, source_code))
+            if hasattr(rule, 'check_source'):
+                results.extend(rule.check_source(source_code, tree))
+            if hasattr(rule, 'check_node'):
+                for node in ast.walk(tree):
+                    results.extend(rule.check_node(node))
 
         return results
 ```
 
-### 3. VS Code Extension Entry Point (`vscode-extension/src/extension.ts`)
+## Validation Rules
 
-The TypeScript extension that integrates with VS Code:
+### Rule Categories
 
-```typescript
-export function activate(context: vscode.ExtensionContext) {
-    // Register all providers
-    const diagnosticsProvider = new GenVMDiagnosticsProvider();
-    const hoverProvider = new GenVMHoverProvider();
-    const completionProvider = new GenVMCompletionProvider();
+1. **Structure Rules** (`rules/contract.py`)
+   - Magic comment validation
+   - Import statement checking
+   - Contract class structure
+   - Constructor requirements
 
-    // Register file watcher for real-time validation
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
-    watcher.onDidChange(uri => diagnosticsProvider.validateFile(uri));
+2. **Type System Rules** (`rules/types.py`)
+   - Sized integer enforcement (u256, u64, etc.)
+   - Collection type validation (TreeMap, DynArray)
+   - Return type checking
 
-    // Register commands
-    vscode.commands.registerCommand('genvm.lintCurrentFile', lintCurrentFile);
-}
-```
+3. **Decorator Rules** (`rules/decorators.py`)
+   - Method decorator validation
+   - State modification detection
+   - Constructor decoration prevention
 
-## Component Integration
+4. **Pattern Rules** (`rules/genvm_patterns.py`)
+   - GenVM-specific API usage
+   - Best practices enforcement
 
-### Python Linter ↔ MyPy Integration
+5. **MyPy Integration** (`rules/python_types.py`)
+   - Python type checking
+   - Type inference support
 
-The `PythonTypeCheckRule` in `src/genvm_linter/rules/python_types.py` integrates MyPy:
+### Rule Implementation Pattern
+
+Each rule follows a consistent pattern:
 
 ```python
-class PythonTypeCheckRule(Rule):
-    def validate(self, tree: ast.AST, source_code: str) -> List[ValidationResult]:
-        # Create temporary file with source code
-        with tempfile.NamedTemporaryFile(suffix='.py') as tmp:
-            tmp.write(source_code.encode())
-            tmp.flush()
+class BaseRule:
+    def __init__(self, rule_id: str):
+        self.rule_id = rule_id
 
-            # Run MyPy with custom GenVM stubs
-            result = mypy_api.run([
-                tmp.name,
-                '--config-file', self.get_mypy_config(),
-                '--custom-typeshed', self.get_genvm_stubs()
-            ])
+    def check_source(self, source: str, tree: ast.AST) -> List[ValidationResult]:
+        """Check entire source file"""
+        pass
 
-            # Parse MyPy output and convert to ValidationResults
-            return self.parse_mypy_output(result[0])
+    def check_node(self, node: ast.AST) -> List[ValidationResult]:
+        """Check individual AST node"""
+        pass
 ```
 
-**Key Features:**
-- Validates standard Python type hints
-- Uses custom type stubs for GenVM types (u256, TreeMap, etc.)
-- Runs alongside GenVM-specific validation rules
-- Provides type inference and checking
+## Data Flow
 
-### Python Linter ↔ VS Code Extension
+1. **Input**: Python source file or code string
+2. **Parsing**: Convert to AST using Python's `ast` module
+3. **Validation**: Apply each rule to the AST
+4. **Results**: Collect `ValidationResult` objects
+5. **Output**: Format as text or JSON
 
-The VS Code extension communicates with the Python linter via subprocess:
+## Configuration
 
-```typescript
-// In vscode-extension/src/genvm-linter.ts
-export class GenVMLinter {
-    async lintFile(filePath: string): Promise<Diagnostic[]> {
-        // Spawn Python subprocess
-        const pythonPath = this.getPythonPath();
-        const child = spawn(pythonPath, [
-            '-m', 'genvm_linter.cli',
-            '--format', 'json',
-            filePath
-        ]);
+The linter can be configured through:
 
-        // Collect JSON output
-        let output = '';
-        child.stdout.on('data', (data) => {
-            output += data.toString();
-        });
+1. **Command-line arguments**:
+   - `--severity`: Minimum severity level
+   - `--rule`: Specific rules to run
+   - `--exclude-rule`: Rules to skip
 
-        // Parse JSON and convert to VS Code diagnostics
-        return new Promise((resolve) => {
-            child.on('close', () => {
-                const results = JSON.parse(output);
-                const diagnostics = this.convertToDiagnostics(results);
-                resolve(diagnostics);
-            });
-        });
+2. **Python API**:
+   ```python
+   linter = GenVMLinter()
+   linter.rules = [rule for rule in linter.rules if should_run(rule)]
+   ```
+
+## Integration Points
+
+### External Tools
+
+The linter provides a JSON output format for integration with IDEs and CI/CD pipelines:
+
+```json
+{
+    "results": [
+        {
+            "rule_id": "genvm-types",
+            "message": "Storage field must use sized integer",
+            "severity": "error",
+            "line": 10,
+            "column": 4,
+            "filename": "contract.py",
+            "suggestion": "Change 'int' to 'u256'"
+        }
+    ],
+    "summary": {
+        "total": 1,
+        "by_severity": {
+            "error": 1,
+            "warning": 0,
+            "info": 0
+        }
     }
 }
 ```
 
-**Communication Flow:**
-1. VS Code detects file change/save
-2. Extension spawns Python process: `python3 -m genvm_linter.cli --format json file.py`
-3. Python linter validates and returns JSON results
-4. Extension parses JSON and creates VS Code diagnostics
-5. Editor displays errors/warnings with squiggles
+### Python Package
 
-## Data Flow
-
-1. **Source Code Input**
-   - User writes/edits a `.py` file in VS Code
-   - File contains GenVM magic comment: `# { "Depends": "py-genlayer:test" }`
-
-2. **VS Code Detection**
-   - Extension activates on Python files
-   - File watcher triggers on save/change
-   - Checks for GenVM contract patterns
-
-3. **Validation Process**
-   ```
-   File Change → Extension → Python CLI → Linter Core → Rules → Results
-   ```
-
-4. **Rule Execution Pipeline**
-   - Each rule class inherits from `Rule` base class
-   - Rules implement `validate(tree: ast.AST, source: str)` method
-   - Rules return `List[ValidationResult]` with:
-     - Severity (ERROR, WARNING, INFO)
-     - Line/column location
-     - Error message
-     - Fix suggestions
-
-5. **Result Processing**
-   - Results aggregated from all rules
-   - Formatted as JSON for VS Code
-   - Extension converts to diagnostics
-   - Editor displays inline errors
-
-## Rule System
-
-### Base Rule Class (`src/genvm_linter/rules/base.py`)
+The linter can be used as a Python library:
 
 ```python
-class Rule(ABC):
-    @abstractmethod
-    def validate(self, tree: ast.AST, source_code: str) -> List[ValidationResult]:
-        """Validate the AST and return results"""
-        pass
+from genvm_linter import GenVMLinter
 
-class ValidationResult:
-    rule_id: str
-    message: str
-    severity: Severity
-    line: int
-    column: int
-    suggestion: Optional[str]
+linter = GenVMLinter()
+results = linter.lint_file("contract.py")
+
+for result in results:
+    print(f"{result.severity}: {result.message}")
 ```
 
-### Rule Categories
+## Testing Strategy
 
-1. **Structure Rules** (`contract.py`)
-   - Magic comment validation
-   - Import statement checking
-   - Contract class structure
+### Unit Tests
+- Individual rule validation
+- Edge case handling
+- Error message formatting
 
-2. **Type System Rules** (`types.py`)
-   - Sized integer validation (u256, u64, etc.)
-   - Collection type checking (TreeMap, DynArray)
-   - Return type validation
+### Integration Tests
+- Complete contract validation
+- Multiple rule interaction
+- CLI functionality
 
-3. **Decorator Rules** (`decorators.py`)
-   - `@gl.public.view` and `@gl.public.write` validation
-   - Constructor decorator checking
-   - State modification detection
-
-4. **Python Type Rules** (`python_types.py`)
-   - MyPy integration
-   - Type hint validation
-   - GenVM stub generation
-
-5. **Pattern Rules** (`genvm_patterns.py`)
-   - GenVM API usage patterns
-   - Lazy object validation
-   - Storage pattern checking
-
-## VS Code Extension Features
-
-### Providers
-
-1. **Diagnostics Provider**
-   - Real-time error/warning display
-   - Squiggles and problem panel integration
-
-2. **Hover Provider**
-   - Documentation on hover
-   - Type information display
-   - Links to GenLayer docs
-
-3. **Completion Provider**
-   - Auto-complete for GenVM types
-   - Snippet suggestions
-   - Import completions
-
-4. **Code Actions Provider**
-   - Quick fixes for common issues
-   - Auto-import missing types
-   - Decorator corrections
-
-5. **Inlay Hints Provider**
-   - Type hints for variables
-   - Parameter hints for methods
-
-## Configuration
-
-### Python Linter Configuration
-
-Via `pyproject.toml`:
-```toml
-[tool.genvm]
-exclude_rules = ["genvm-magic-comment"]
-severity = "warning"
+### Test Organization
+```
+tests/
+├── unit/
+│   ├── test_rules.py
+│   └── test_linter.py
+├── integration/
+│   ├── test_complete_contracts.py
+│   └── test_cli.py
+└── fixtures/
+    ├── valid_contracts/
+    └── invalid_contracts/
 ```
 
-### VS Code Extension Configuration
+## Performance Considerations
 
-Via VS Code settings:
-```json
-{
-  "genvm.linting.enabled": true,
-  "genvm.linting.severity": "warning",
-  "genvm.python.interpreterPath": "python3"
-}
-```
-
-## Performance Optimizations
-
-1. **AST Caching** - Parse once, validate with all rules
-2. **Parallel Rule Execution** - Rules run independently
-3. **Incremental Validation** - Only re-validate changed files
-4. **JSON Communication** - Efficient IPC between processes
-5. **Lazy Loading** - Load rules only when needed
-
-## Testing Architecture
-
-- **Unit Tests** - Individual rule validation
-- **Integration Tests** - Full contract validation
-- **VS Code Tests** - Extension functionality
-- **MyPy Tests** - Type checking validation
+- **AST Parsing**: Single parse per file
+- **Rule Execution**: Parallel rule checking where possible
+- **Caching**: Results can be cached based on file modification time
+- **Memory**: Minimal memory footprint, processes one file at a time
 
 ## Future Enhancements
 
-1. **Language Server Protocol (LSP)** - Replace subprocess with LSP
-2. **Incremental Parsing** - Parse only changed regions
-3. **Custom Rule Plugins** - User-defined validation rules
-4. **Multi-file Analysis** - Cross-contract validation
-5. **Performance Profiling** - Optimization opportunities
+1. **Incremental Linting**: Only re-check modified portions
+2. **Auto-fix Capability**: Automatically fix certain issues
+3. **Custom Rule Support**: Allow user-defined rules
+4. **Performance Profiling**: Built-in performance metrics
