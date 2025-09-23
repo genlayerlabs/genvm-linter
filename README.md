@@ -239,31 +239,41 @@ genvm-linter/
 ├── src/genvm_linter/
 │   ├── __init__.py          # Main package
 │   ├── linter.py            # Core linter logic
-│   ├── cli.py               # Command-line interface  
+│   ├── cli.py               # Command-line interface
 │   └── rules/               # Validation rules
 │       ├── __init__.py
 │       ├── base.py          # Base rule classes
 │       ├── contract.py      # Contract structure rules
 │       ├── decorators.py    # Decorator validation
-│       └── types.py         # Type system rules
+│       ├── types.py         # Type system rules
+│       ├── genvm_patterns.py # GenVM API patterns
+│       └── python_types.py  # MyPy integration
 ├── tests/
-│   ├── test_linter.py       # Linter tests
-│   ├── test_rules.py        # Individual rule tests
-│   └── fixtures/            # Test contract files
+│   ├── unit/                # Unit tests
+│   ├── integration/         # Integration tests
+│   ├── fixtures/            # Test contract files
+│   └── examples/            # Example contracts
+├── vscode-extension/        # VS Code extension
+│   ├── src/                 # TypeScript source
+│   ├── tests/               # Extension tests
+│   └── docs/                # Extension documentation
+├── ARCHITECTURE.md          # System architecture
+├── CONTRIBUTING.md          # Contribution guidelines
+├── CHANGELOG.md             # Version history
 ├── pyproject.toml           # Package configuration
 └── README.md                # This file
 ```
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed system architecture and component integration
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Guidelines for contributing to the project
+- [CHANGELOG.md](CHANGELOG.md) - Version history and release notes
+- [VS Code Extension Documentation](vscode-extension/README.md) - Extension-specific documentation
+
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for your changes
-5. Run the test suite (`pytest`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines on how to contribute to this project.
 
 ## License
 
