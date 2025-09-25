@@ -150,11 +150,9 @@ class GenVMApiUsageRule(Rule):
     
     def _might_be_lazy_object(self, node: ast.AST) -> bool:
         """Check if node might be a lazy object."""
-        # This is a heuristic - in real implementation we'd need type analysis
+        # Only check for explicit .lazy() calls
         if isinstance(node, ast.Call):
-            if self._is_gl_method_call(node, 'eq_principle', 'strict_eq') or \
-               self._is_gl_method_call(node, 'eq_principle', 'prompt_comparative') or \
-               self._is_gl_method_call(node, 'nondet', 'exec_prompt'):
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'lazy':
                 return True
         return False
 
@@ -201,12 +199,9 @@ class LazyObjectRule(Rule):
     
     def _returns_lazy_object(self, func: ast.Attribute) -> bool:
         """Check if function returns a Lazy object."""
-        if isinstance(func.value, ast.Attribute):
-            if (isinstance(func.value.value, ast.Name) and 
-                func.value.value.id == 'gl' and
-                func.value.attr in ['eq_principle', 'nondet'] and
-                func.attr in ['strict_eq', 'prompt_comparative', 'exec_prompt']):
-                return True
+        # Only check for explicit .lazy() method calls
+        if func.attr == 'lazy':
+            return True
         return False
 
 
