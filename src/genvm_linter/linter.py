@@ -11,6 +11,7 @@ from .rules.types import TypeSystemRule
 from .rules.genvm_patterns import GenVMApiUsageRule, LazyObjectRule, StoragePatternRule
 from .rules.python_types import PythonTypeCheckRule, GenVMTypeStubRule
 from .rules.genvm_dataclasses import DataclassValidation
+from .rules.nondet_storage import NondetStorageAccessRule
 
 
 class GenVMLinter:
@@ -30,6 +31,7 @@ class GenVMLinter:
             PythonTypeCheckRule(),
             GenVMTypeStubRule(),
             DataclassValidation(),
+            NondetStorageAccessRule(),
         ]
     
     def add_rule(self, rule: Rule) -> None:
