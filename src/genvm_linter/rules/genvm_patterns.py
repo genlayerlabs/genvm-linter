@@ -5,6 +5,7 @@ import re
 from typing import List, Optional, Set
 
 from .base import Rule, ValidationResult, Severity
+from ..type_system import GenVMTypeSystem
 
 
 class GenVMApiUsageRule(Rule):
@@ -240,19 +241,16 @@ class StoragePatternRule(Rule):
         # Check for proper storage type usage
         if isinstance(node.annotation, ast.Name):
             type_name = node.annotation.id
-            if type_name in ['dict', 'list', 'set']:
-                storage_alternative = {
-                    'dict': 'TreeMap',
-                    'list': 'DynArray', 
-                    'set': 'DynArray'  # No direct set equivalent
-                }
-                results.append(self.create_result(
-                    f"Use GenVM storage type '{storage_alternative[type_name]}' instead of '{type_name}' for contract storage",
-                    Severity.WARNING,
-                    line=node.lineno,
-                    filename=filename,
-                    suggestion=f"Replace '{type_name}' with 'gl.storage.{storage_alternative[type_name]}'"
-                ))
+            if GenVMTypeSystem.is_python_collection(type_name):
+                genvm_alternative = GenVMTypeSystem.get_genvm_equivalent(type_name)
+                if genvm_alternative:
+                    results.append(self.create_result(
+                        f"Use GenVM storage type '{genvm_alternative}' instead of '{type_name}' for contract storage",
+                        Severity.WARNING,
+                        line=node.lineno,
+                        filename=filename,
+                        suggestion=f"Replace '{type_name}' with 'gl.storage.{genvm_alternative}'"
+                    ))
         
         return results
     

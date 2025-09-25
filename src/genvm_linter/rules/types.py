@@ -4,6 +4,7 @@ import ast
 from typing import List, Optional, Set
 
 from .base import Rule, ValidationResult, Severity
+from ..type_system import GenVMTypeSystem
 
 
 class TypeSystemRule(Rule):
@@ -14,26 +15,6 @@ class TypeSystemRule(Rule):
             rule_id="genvm-types",
             description="GenVM type system validation for storage and method signatures"
         )
-        
-        # Sized integer types supported by GenVM
-        self.sized_integer_types = {
-            # Unsigned integers
-            "u8", "u16", "u24", "u32", "u40", "u48", "u56", "u64", "u72", "u80", "u88", "u96",
-            "u104", "u112", "u120", "u128", "u136", "u144", "u152", "u160", "u168", "u176",
-            "u184", "u192", "u200", "u208", "u216", "u224", "u232", "u240", "u248", "u256",
-            # Signed integers  
-            "i8", "i16", "i24", "i32", "i40", "i48", "i56", "i64", "i72", "i80", "i88", "i96",
-            "i104", "i112", "i120", "i128", "i136", "i144", "i152", "i160", "i168", "i176",
-            "i184", "i192", "i200", "i208", "i216", "i224", "i232", "i240", "i248", "i256",
-            # BigInt
-            "bigint"
-        }
-        
-        # GenVM collection types
-        self.genvm_collections = {"DynArray", "TreeMap"}
-        
-        # Python collections that should be replaced
-        self.python_collections = {"list", "dict"}
     
     def check(self, node: ast.AST, filename: Optional[str] = None) -> List[ValidationResult]:
         """Check for proper GenVM type usage."""
@@ -104,7 +85,7 @@ class TypeSystemRule(Rule):
                 Severity.ERROR,
                 line=line,
                 filename=filename,
-                suggestion=f"Replace 'int' with a sized integer type like 'u256'"
+                suggestion=f"Replace 'int' with a sized integer type like '{GenVMTypeSystem.get_suggested_type_for_storage('int')}'"
             ))
         
         # Check for Python collections (should use GenVM collections)
@@ -112,19 +93,19 @@ class TypeSystemRule(Rule):
             if isinstance(annotation.value, ast.Name):
                 if annotation.value.id == "list":
                     results.append(self.create_result(
-                        f"Storage field '{field_name}' uses 'list' type. Use 'DynArray' instead",
+                        f"Storage field '{field_name}' uses 'list' type. Use '{GenVMTypeSystem.get_genvm_equivalent('list')}' instead",
                         Severity.ERROR,
                         line=line,
                         filename=filename,
-                        suggestion=f"Replace 'list' with 'DynArray'"
+                        suggestion=f"Replace 'list' with '{GenVMTypeSystem.get_genvm_equivalent('list')}'"
                     ))
                 elif annotation.value.id == "dict":
                     results.append(self.create_result(
-                        f"Storage field '{field_name}' uses 'dict' type. Use 'TreeMap' instead",
+                        f"Storage field '{field_name}' uses 'dict' type. Use '{GenVMTypeSystem.get_genvm_equivalent('dict')}' instead",
                         Severity.ERROR,
                         line=line,
                         filename=filename,
-                        suggestion=f"Replace 'dict' with 'TreeMap'"
+                        suggestion=f"Replace 'dict' with '{GenVMTypeSystem.get_genvm_equivalent('dict')}'"
                     ))
         
         return results
@@ -153,7 +134,7 @@ class TypeSystemRule(Rule):
         
         # Check for sized integer types in parameter annotations (should use int)
         if isinstance(arg.annotation, ast.Name):
-            if arg.annotation.id in self.sized_integer_types and arg.annotation.id != "bigint":
+            if GenVMTypeSystem.should_use_int_in_signature(arg.annotation.id):
                 results.append(self.create_result(
                     f"Method '{method.name}' parameter '{arg.arg}' uses '{arg.annotation.id}' type. Use 'int' for parameter types",
                     Severity.ERROR,
@@ -173,7 +154,7 @@ class TypeSystemRule(Rule):
         
         # Check for sized integer types in return annotations (should use int)
         if isinstance(method.returns, ast.Name):
-            if method.returns.id in self.sized_integer_types and method.returns.id != "bigint":
+            if GenVMTypeSystem.should_use_int_in_signature(method.returns.id):
                 results.append(self.create_result(
                     f"Method '{method.name}' returns '{method.returns.id}' type. Use 'int' for return types",
                     Severity.ERROR,
@@ -222,7 +203,7 @@ class TypeSystemRule(Rule):
         for stmt in class_def.body:
             if isinstance(stmt, ast.AnnAssign) and stmt.annotation:
                 if isinstance(stmt.annotation, ast.Name):
-                    if stmt.annotation.id in self.sized_integer_types:
+                    if GenVMTypeSystem.is_sized_int_type(stmt.annotation.id):
                         has_sized_integers = True
                         break
         

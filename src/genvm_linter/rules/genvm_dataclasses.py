@@ -6,6 +6,7 @@ Tracks dataclass definitions and validates instantiations.
 import ast
 from typing import Dict, List, Optional, Set
 from .base import Rule, ValidationResult, Severity
+from ..type_system import GenVMTypeSystem
 
 
 class DataclassValidation(Rule, ast.NodeVisitor):
@@ -130,12 +131,6 @@ class DataclassValidation(Rule, ast.NodeVisitor):
 
     def _is_type_compatible(self, value: ast.AST, expected_type: str) -> bool:
         """Check if a value is compatible with the expected type."""
-        # GenVM sized integer types that accept int values
-        sized_int_types = {
-            'u8', 'u16', 'u32', 'u64', 'u128', 'u256',
-            'i8', 'i16', 'i32', 'i64', 'i128', 'i256'
-        }
-
         if isinstance(value, ast.Constant):
             if expected_type == 'str' and isinstance(value.value, str):
                 return True
@@ -146,7 +141,7 @@ class DataclassValidation(Rule, ast.NodeVisitor):
             elif expected_type == 'bool' and isinstance(value.value, bool):
                 return True
             # GenVM type equivalences: int literals can be used for sized integer types
-            elif expected_type in sized_int_types and isinstance(value.value, int) and not isinstance(value.value, bool):
+            elif GenVMTypeSystem.is_sized_int_type(expected_type) and isinstance(value.value, int) and not isinstance(value.value, bool):
                 return True
         elif isinstance(value, ast.Name):
             # Can't determine variable type without more analysis
@@ -156,12 +151,12 @@ class DataclassValidation(Rule, ast.NodeVisitor):
             if isinstance(value.func, ast.Name):
                 return value.func.id == expected_type
         elif isinstance(value, ast.List):
-            # Lists are compatible with list, List, and DynArray (GenVM collection type)
-            if expected_type in ['list', 'List', 'DynArray']:
+            # Use centralized type compatibility check
+            if GenVMTypeSystem.is_type_compatible('list', expected_type):
                 return True
         elif isinstance(value, ast.Dict):
-            # Dicts are compatible with dict, Dict, and TreeMap (GenVM mapping type)
-            if expected_type in ['dict', 'Dict', 'TreeMap']:
+            # Use centralized type compatibility check
+            if GenVMTypeSystem.is_type_compatible('dict', expected_type):
                 return True
 
         return False

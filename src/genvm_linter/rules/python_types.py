@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 from ..rules import Rule, ValidationResult, Severity
+from ..type_system import GenVMTypeSystem
 
 
 class DataclassTypeTransformer(ast.NodeTransformer):
