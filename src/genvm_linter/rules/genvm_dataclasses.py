@@ -147,9 +147,10 @@ class DataclassValidation(Rule, ast.NodeVisitor):
             # Can't determine variable type without more analysis
             return True  # Assume compatible for now
         elif isinstance(value, ast.Call):
-            # Constructor calls - check if types match
-            if isinstance(value.func, ast.Name):
-                return value.func.id == expected_type
+            # For function calls, we can't determine the return type without full type inference
+            # We'll be lenient here and let mypy handle the actual type checking
+            # This prevents false positives for functions that return compatible types
+            return True
         elif isinstance(value, ast.List):
             # Use centralized type compatibility check
             if GenVMTypeSystem.is_type_compatible('list', expected_type):
