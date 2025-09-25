@@ -84,7 +84,7 @@ class PythonTypeCheckRule(Rule):
         
         try:
             # Check if mypy is available via python3 -m mypy
-            subprocess.run(['python3', '-m', 'mypy', '--version'], capture_output=True, check=True, env=env)
+            subprocess.run(['python3.12', '-m', 'mypy', '--version'], capture_output=True, check=True, env=env)
         except (subprocess.CalledProcessError, FileNotFoundError):
             # Mypy not available, skip type checking
             return results
@@ -318,9 +318,6 @@ class dict(Dict[K, V], Generic[K, V]):
     def __setitem__(self, key: K, value: V) -> None: ...
     def __contains__(self, key: object) -> bool: ...
     def __len__(self) -> int: ...
-
-class Contract:
-    pass
 
 class Address:
     def __init__(self, address: str) -> None: ...
@@ -573,9 +570,9 @@ def allow_storage(cls):
             
             # Run mypy on the temporary file
             mypy_result = subprocess.run([
-                'python3', '-m', 'mypy', 
+                'python3.12', '-m', 'mypy',
                 temp_file_path,
-                '--python-version', '3.9',
+                '--python-version', '3.12',
                 '--ignore-missing-imports',  # Ignore genlayer imports
                 '--no-strict-optional',
                 '--warn-return-any',
