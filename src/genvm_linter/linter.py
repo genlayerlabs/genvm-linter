@@ -10,6 +10,7 @@ from .rules.decorators import DecoratorRule
 from .rules.types import TypeSystemRule
 from .rules.genvm_patterns import GenVMApiUsageRule, LazyObjectRule, StoragePatternRule
 from .rules.python_types import PythonTypeCheckRule, GenVMTypeStubRule
+from .rules.genvm_dataclasses import DataclassValidation
 
 
 class GenVMLinter:
@@ -28,6 +29,7 @@ class GenVMLinter:
             StoragePatternRule(),
             PythonTypeCheckRule(),
             GenVMTypeStubRule(),
+            DataclassValidation(),
         ]
     
     def add_rule(self, rule: Rule) -> None:
