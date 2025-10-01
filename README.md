@@ -23,6 +23,12 @@ A Python linter specifically designed for GenLayer GenVM intelligent contracts. 
 - Validates constructor decoration rules
 - Comprehensive error messages with suggestions
 
+🚀 **Version Awareness**
+- Automatic version detection from contract comments
+- Version-aware rule infrastructure
+- Support for version and hash-based rule activation
+- Test rules demonstrating version/hash-specific behavior
+
 ## Installation
 
 ### From Source
@@ -71,8 +77,11 @@ genvm-lint --exclude-rule genvm-magic-comment contract.py
 ```python
 from genvm_linter import GenVMLinter
 
-# Create linter instance
+# Create linter instance (version-aware by default)
 linter = GenVMLinter()
+
+# Or disable version awareness for traditional behavior
+linter = GenVMLinter(use_version_aware=False)
 
 # Lint a file
 results = linter.lint_file("path/to/contract.py")
@@ -102,7 +111,63 @@ for result in results:
         print(f"💡 {result.suggestion}")
 ```
 
+## Version Detection
+
+The linter automatically detects version information from your contracts:
+
+### Version Specification
+
+Contracts can specify their GenVM version using:
+
+```python
+# Method 1: Explicit version comment
+# v0.1.0
+# { "Depends": "py-genlayer:test" }
+
+# Method 2: Version in dependency
+# { "Depends": "py-genlayer:0.2.0" }
+
+# Method 3: Using dependency hash
+# { "Depends": "py-genlayer:1abc2def3ghi4jkl5mno6pqr7stu8vwx9yza0bcd1efg2hij3klm4" }
+```
+
+If no version is specified, the linter uses "latest".
+
+### Test Rules
+
+The linter includes test rules demonstrating the version-aware capabilities:
+
+#### FutureFeatureRule
+- **Activation:** Only in version 9.9.9
+- **Behavior:** Warns about variables starting with `_future_`
+- **Purpose:** Demonstrates version-specific rule activation
+
+#### ExperimentalHashRule
+- **Activation:** Always active except with specific hash
+- **Disabled when:** Using hash `1abc2def3ghi4jkl5mno6pqr7stu8vwx9yza0bcd1efg2hij3klm4`
+- **Behavior:** Warns about `experimental_` prefix
+- **Purpose:** Demonstrates hash-specific rule control
+- **Note:** Infrastructure supports multiple hashes via `allowed_hashes` and `excluded_hashes` lists for future rules
+
+#### DebugModeRule
+- **Activation:** Always active in production
+- **Disabled when:** Using `py-genlayer:test` dependency
+- **Behavior:** Warns about debug variables (`debug_`, `test_`, `tmp_`)
+- **Purpose:** Keeps production code clean
+
+### Version Information API
+
+```python
+# Get version information from source
+info = linter.get_version_info(source_code)
+print(info["version"])  # Detected version
+print(info["dependencies"])  # Dependencies dict
+print(info["features"])  # Available features for this version
+```
+
 ## Validation Rules
+
+All validation rules are currently enabled for all versions. The version-aware infrastructure allows for future version-specific rules.
 
 ### Required Structure Rules
 
@@ -238,21 +303,31 @@ mypy src/
 genvm-linter/
 ├── src/genvm_linter/
 │   ├── __init__.py          # Main package
-│   ├── linter.py            # Core linter logic
+│   ├── linter.py            # Core linter with version awareness
 │   ├── cli.py               # Command-line interface
+│   ├── version.py           # Version management
+│   ├── rule_registry.py     # Rule registry system
 │   └── rules/               # Validation rules
 │       ├── __init__.py
 │       ├── base.py          # Base rule classes
+│       ├── versioned.py     # Version-aware rule base
 │       ├── contract.py      # Contract structure rules
 │       ├── decorators.py    # Decorator validation
 │       ├── types.py         # Type system rules
 │       ├── genvm_patterns.py # GenVM API patterns
-│       └── python_types.py  # MyPy integration
+│       ├── python_types.py  # MyPy integration
+│       └── test_rules.py    # Test/demo rules
 ├── tests/
 │   ├── unit/                # Unit tests
 │   ├── integration/         # Integration tests
 │   ├── fixtures/            # Test contract files
 │   └── examples/            # Example contracts
+├── config/
+│   └── versions.yaml        # Version configuration
+├── docs/
+│   └── VERSION_RULES.md     # Detailed version docs
+├── examples/
+│   └── versioned_contracts.py # Version examples
 ├── ARCHITECTURE.md          # System architecture
 ├── CONTRIBUTING.md          # Contribution guidelines
 ├── CHANGELOG.md             # Version history
@@ -265,6 +340,8 @@ genvm-linter/
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Python linter architecture and rule system
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Guidelines for contributing to the project
 - [CHANGELOG.md](CHANGELOG.md) - Version history and release notes
+- [docs/VERSION_RULES.md](docs/VERSION_RULES.md) - Detailed version-aware rules documentation
+- [examples/versioned_contracts.py](examples/versioned_contracts.py) - Example contracts with different versions
 
 ## VS Code Extension
 
