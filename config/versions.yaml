@@ -1,0 +1,39 @@
+# GenVM Linter Configuration
+# Rule configurations for the version-aware linting system
+#
+# All base validation rules are enabled for all versions and hashes.
+# Test rules demonstrate version/hash-specific behavior.
+
+# Active Rules
+rules:
+  # Base validation rules - always enabled
+  base_rules:
+    - "magic-comment"       # Validates magic comment and extracts version
+    - "import"             # Validates import statements
+    - "contract-class"     # Validates contract class structure
+    - "decorator"          # Validates method decorators
+    - "type-system"        # Validates GenVM type system usage
+    - "genvm-api"          # Validates GenVM API usage patterns
+    - "lazy-object"        # Validates lazy object usage
+    - "storage-pattern"    # Validates storage access patterns
+    - "dataclass"          # Validates dataclass usage
+    - "nondet-storage"     # Validates non-deterministic storage access
+    - "python-types"       # Python type checking integration
+    - "type-stub"          # GenVM type stub validation
+
+  # Test rules - demonstrate version/hash-specific capabilities
+  test_rules:
+    future-feature:
+      description: "Warns about _future_ prefix"
+      activation: "Only in version 9.9.9"
+      purpose: "Demonstrates version-specific rule activation"
+
+    experimental-hash:
+      description: "Warns about experimental_ prefix"
+      disabled_with: "Hash: 1abc2def3ghi4jkl5mno6pqr7stu8vwx9yza0bcd1efg2hij3klm4"
+      purpose: "Demonstrates hash-specific rule behavior"
+
+    debug-mode:
+      description: "Warns about debug variables (debug_, test_, tmp_)"
+      disabled_with: "Dependency: py-genlayer:test"
+      purpose: "Demonstrates dependency-based rule behavior"
