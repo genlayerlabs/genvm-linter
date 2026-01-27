@@ -23,7 +23,7 @@ from .validate.artifacts import (
 )
 
 # Subcommand names for detecting legacy mode
-SUBCOMMANDS = {"check", "lint", "validate", "schema", "download"}
+SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs"}
 
 
 def print_progress(downloaded: int, total: int):
@@ -233,6 +233,52 @@ def download(version, list_versions):
         click.echo()
         click.echo(f"✗ Download failed: {e}", err=True)
         sys.exit(3)
+
+
+@main.command()
+@click.option("--version", "-v", "version", help="GenVM version (e.g., v0.2.12)")
+@click.option("--output", "-o", type=click.Path(), help="Output directory for stubs")
+@click.option("--list", "list_versions", is_flag=True, help="List cached stub versions")
+def stubs(version, output, list_versions):
+    """Generate type stubs for IDE intellisense."""
+    from .stubs import generate_stubs, list_cached_stubs, get_stubs_path
+
+    if list_versions:
+        versions = list_cached_stubs()
+        if versions:
+            click.echo("Cached stub versions:")
+            for v in versions:
+                click.echo(f"  {v} -> {get_stubs_path(v)}")
+        else:
+            click.echo("No cached stubs")
+        return
+
+    if version is None:
+        click.echo("Fetching latest version...")
+        version = get_latest_version()
+        click.echo(f"Latest: {version}")
+
+    click.echo(f"Generating stubs for GenVM {version}...")
+
+    def progress(downloaded: int, total: int):
+        if total > 0:
+            percent = min(100, downloaded * 100 // total)
+            mb_down = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            click.echo(f"\r  Downloading SDK: {mb_down:.1f}/{mb_total:.1f} MB ({percent}%)", nl=False)
+
+    try:
+        output_path = Path(output) if output else None
+        stubs_path = generate_stubs(version, output_path, progress_callback=progress)
+        click.echo()  # newline after progress
+        click.echo(f"✓ Stubs generated at {stubs_path}")
+        click.echo()
+        click.echo("To use in VS Code, add to settings.json:")
+        click.echo(f'  "python.analysis.stubPath": "{stubs_path}"')
+    except Exception as e:
+        click.echo()
+        click.echo(f"✗ Stub generation failed: {e}", err=True)
+        sys.exit(1)
 
 
 def cli():
