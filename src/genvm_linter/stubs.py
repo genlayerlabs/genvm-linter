@@ -143,8 +143,8 @@ def allow_storage(cls: type[T]) -> type[T]:
 '''
 
 MANUAL_GL = '''
-from typing import Callable, TypeVar, Any, overload
-from .py.types import Address, u256
+from typing import Callable, TypeVar, Any, overload, Generic
+from ..py.types import Address, u256
 
 T = TypeVar('T')
 R = TypeVar('R')
