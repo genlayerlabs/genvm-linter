@@ -256,6 +256,47 @@ def contract_interface(cls: type[T]) -> type[T]:
 '''
 
 
+MANUAL_EMBEDDINGS = '''
+"""GenLayer embeddings module for vector storage and similarity search."""
+
+from typing import TypeVar, Generic, Any, Iterator
+import numpy as np
+
+T = TypeVar('T')
+V = TypeVar('V')
+D = TypeVar('D')
+
+class EuclideanDistanceSquared:
+    """Euclidean distance squared metric."""
+    ...
+
+class CosineDistance:
+    """Cosine distance metric."""
+    ...
+
+class VecDB(Generic[T, V, D]):
+    """Vector database for similarity search.
+
+    Type parameters:
+        T: The numpy dtype (e.g., np.float32)
+        V: The vector dimension as a Literal type
+        D: The value type stored with each vector
+    """
+    def __init__(self) -> None: ...
+    def insert(self, key: str, vector: Any, value: D) -> None: ...
+    def search(self, vector: Any, k: int = 10) -> list[tuple[str, D, float]]: ...
+    def delete(self, key: str) -> None: ...
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[str]: ...
+
+class SentenceTransformer:
+    """Sentence transformer for generating embeddings."""
+    def __init__(self, model_name: str) -> None: ...
+    def encode(self, text: str | list[str]) -> Any: ...
+'''
+
+
 def get_stubs_path(version: str) -> Path:
     """Get path to cached stubs for a version."""
     return CACHE_DIR / version
@@ -327,6 +368,11 @@ def generate_stubs(
     _write_gl_stub(genlayer_stubs / "gl" / "__init__.pyi")
     _write_init_stub(genlayer_stubs / "__init__.pyi")
 
+    # Write genlayer_embeddings stubs
+    embeddings_stubs = stubs_path / "genlayer_embeddings"
+    embeddings_stubs.mkdir(parents=True, exist_ok=True)
+    _write_embeddings_stub(embeddings_stubs / "__init__.pyi")
+
     # Write version marker
     (stubs_path / "VERSION").write_text(version)
 
@@ -361,6 +407,12 @@ def _write_gl_stub(path: Path):
     content += MANUAL_GL
 
     path.write_text(content)
+
+
+def _write_embeddings_stub(path: Path):
+    """Write genlayer_embeddings/__init__.pyi."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(MANUAL_EMBEDDINGS)
 
 
 def _write_init_stub(path: Path):
