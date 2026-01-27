@@ -1,169 +1,247 @@
-"""Command-line interface for GenVM linter."""
+"""CLI entry point for genvm-linter."""
 
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 import click
-from colorama import init, Fore, Style
 
-from .linter import GenVMLinter
-from .rules import ValidationResult, Severity
+from . import __version__
+from .lint import lint_contract
+from .output import (
+    format_human_lint,
+    format_human_schema,
+    format_human_validate,
+    format_json,
+    format_vscode_json,
+)
+from .validate import validate_contract
+from .validate.artifacts import (
+    download_artifacts,
+    get_latest_version,
+    list_cached_versions,
+)
 
-# Initialize colorama for cross-platform colored output
-init(autoreset=True)
-
-
-def format_result_text(result: ValidationResult, show_suggestion: bool = True) -> str:
-    """Format a validation result as colored text."""
-    # Color mapping for severity levels
-    severity_colors = {
-        Severity.ERROR: Fore.RED,
-        Severity.WARNING: Fore.YELLOW,
-        Severity.INFO: Fore.CYAN,
-    }
-    
-    color = severity_colors.get(result.severity, Fore.WHITE)
-    
-    # Format the main message
-    location = f"{result.filename}:" if result.filename else ""
-    location += f"{result.line}:{result.column}"
-    
-    formatted = f"{color}{location} {result.severity.value}: {result.message} [{result.rule_id}]{Style.RESET_ALL}"
-    
-    # Add suggestion if available and requested
-    if show_suggestion and result.suggestion:
-        formatted += f"\n  {Fore.GREEN}💡 Suggestion: {result.suggestion}{Style.RESET_ALL}"
-    
-    return formatted
+# Subcommand names for detecting legacy mode
+SUBCOMMANDS = {"check", "lint", "validate", "schema", "download"}
 
 
-def format_result_json(result: ValidationResult) -> dict:
-    """Format a validation result as JSON."""
-    return {
-        "rule_id": result.rule_id,
-        "message": result.message,
-        "severity": result.severity.value,
-        "line": result.line,
-        "column": result.column,
-        "filename": result.filename,
-        "suggestion": result.suggestion
-    }
+def print_progress(downloaded: int, total: int):
+    """Print download progress."""
+    if total > 0:
+        percent = min(100, downloaded * 100 // total)
+        mb_down = downloaded / (1024 * 1024)
+        mb_total = total / (1024 * 1024)
+        click.echo(f"\rDownloading: {mb_down:.1f}/{mb_total:.1f} MB ({percent}%)", nl=False)
 
 
-def count_by_severity(results: List[ValidationResult]) -> dict:
-    """Count results by severity level."""
-    counts = {severity.value: 0 for severity in Severity}
-    for result in results:
-        counts[result.severity.value] += 1
-    return counts
+def _is_legacy_invocation() -> bool:
+    """Detect if this is a legacy VS Code invocation.
 
-
-@click.command()
-@click.argument('paths', nargs=-1, type=click.Path(exists=True))
-@click.option('--format', 'output_format', type=click.Choice(['text', 'json']), 
-              default='text', help='Output format')
-@click.option('--severity', type=click.Choice(['error', 'warning', 'info']),
-              help='Minimum severity level to show')
-@click.option('--no-suggestions', is_flag=True, help='Hide suggestions in text output')
-@click.option('--rule', 'rules', multiple=True, 
-              help='Only run specific rules (can be used multiple times)')
-@click.option('--exclude-rule', 'exclude_rules', multiple=True,
-              help='Exclude specific rules (can be used multiple times)')
-@click.option('--stats', is_flag=True, help='Show summary statistics')
-@click.version_option(version="0.1.0", prog_name="genvm-lint")
-def main(paths: tuple, output_format: str, severity: Optional[str], 
-         no_suggestions: bool, rules: tuple, exclude_rules: tuple, stats: bool) -> None:
+    Legacy: python -m genvm_linter.cli <file> --format json
+    Modern: genvm-lint check <file> --json
     """
-    GenVM Linter - Lint GenLayer intelligent contracts.
-    
-    PATHS can be files or directories. If no paths are provided, 
-    the current directory is linted.
+    if len(sys.argv) < 2:
+        return False
+
+    first_arg = sys.argv[1]
+
+    # If first arg is a subcommand or starts with -, it's modern mode
+    if first_arg in SUBCOMMANDS or first_arg.startswith("-"):
+        return False
+
+    # If first arg looks like a file path, it's legacy mode
+    return True
+
+
+def _run_legacy_lint():
+    """Run lint in legacy mode for VS Code extension compatibility.
+
+    Expected invocation: python -m genvm_linter.cli <file> --format json
     """
-    if not paths:
-        paths = ('.',)
-    
-    # Convert severity string to enum
-    min_severity = None
-    if severity:
-        min_severity = Severity(severity)
-    
-    # Initialize linter
-    linter = GenVMLinter()
-    
-    # Filter rules if requested
-    if rules:
-        linter.rules = [rule for rule in linter.rules if rule.rule_id in rules]
-    
-    if exclude_rules:
-        linter.rules = [rule for rule in linter.rules if rule.rule_id not in exclude_rules]
-    
-    # Collect all results
-    all_results = []
-    
-    for path_str in paths:
-        path = Path(path_str)
-        
-        try:
-            if path.is_file():
-                if path.suffix == '.py':
-                    results = linter.lint_file(path)
-                    all_results.extend(results)
-                else:
-                    click.echo(f"Skipping non-Python file: {path}", err=True)
-            elif path.is_dir():
-                results = linter.lint_directory(path)
-                all_results.extend(results)
-            else:
-                click.echo(f"Path not found: {path}", err=True)
-                sys.exit(1)
-        except Exception as e:
-            click.echo(f"Error processing {path}: {e}", err=True)
-            sys.exit(1)
-    
-    # Filter by severity if requested
-    if min_severity:
-        severity_order = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
-        min_level = severity_order[min_severity]
-        all_results = [r for r in all_results if severity_order[r.severity] >= min_level]
-    
-    # Sort results by filename, then by line number
-    all_results.sort(key=lambda r: (r.filename or "", r.line, r.column))
-    
-    # Output results
-    if output_format == 'json':
-        output = {
-            "results": [format_result_json(r) for r in all_results],
-            "summary": {
-                "total": len(all_results),
-                "by_severity": count_by_severity(all_results)
-            }
-        }
-        click.echo(json.dumps(output, indent=2))
-    else:
-        # Text format
-        if not all_results:
-            click.echo(f"{Fore.GREEN}✓ No issues found!{Style.RESET_ALL}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="GenLayer contract linter (legacy mode)")
+    parser.add_argument("contract", help="Path to contract file")
+    parser.add_argument("--format", dest="output_format", choices=["json", "text"], default="text")
+    parser.add_argument("--severity", choices=["error", "warning", "info"])
+    parser.add_argument("--exclude-rule", dest="exclude_rules", action="append", default=[])
+
+    args = parser.parse_args()
+
+    contract_path = Path(args.contract)
+    if not contract_path.exists():
+        if args.output_format == "json":
+            print(format_vscode_json(
+                type("LintResult", (), {"warnings": [{"code": "E001", "msg": f"File not found: {args.contract}", "line": 1}], "ok": False, "checks_passed": 0})()
+            ))
         else:
-            for result in all_results:
-                click.echo(format_result_text(result, not no_suggestions))
-        
-        # Show statistics if requested
-        if stats or all_results:
-            counts = count_by_severity(all_results)
-            click.echo()
-            click.echo("Summary:")
-            click.echo(f"  {Fore.RED}Errors: {counts['error']}{Style.RESET_ALL}")
-            click.echo(f"  {Fore.YELLOW}Warnings: {counts['warning']}{Style.RESET_ALL}")
-            click.echo(f"  {Fore.CYAN}Info: {counts['info']}{Style.RESET_ALL}")
-            click.echo(f"  Total: {len(all_results)}")
-    
-    # Exit with error code if there are errors
-    error_count = sum(1 for r in all_results if r.severity == Severity.ERROR)
-    if error_count > 0:
+            print(f"Error: File not found: {args.contract}")
         sys.exit(1)
 
+    result = lint_contract(contract_path)
 
-if __name__ == '__main__':
-    main()
+    # Filter by severity if specified
+    if args.severity == "error":
+        result.warnings = [w for w in result.warnings if w.get("code", "").startswith("E")]
+
+    # Filter excluded rules
+    if args.exclude_rules:
+        result.warnings = [w for w in result.warnings if w.get("code") not in args.exclude_rules]
+
+    if args.output_format == "json":
+        print(format_vscode_json(result))
+    else:
+        print(format_human_lint(result))
+
+    sys.exit(0 if result.ok else 1)
+
+
+@click.group()
+@click.version_option(__version__, prog_name="genvm-lint")
+def main():
+    """GenLayer contract linter and validator."""
+    pass
+
+
+@main.command(name="check")
+@click.argument("contract", type=click.Path(exists=True))
+@click.option("--json", "json_output", is_flag=True, help="Output JSON (agent-friendly)")
+def check_cmd(contract, json_output):
+    """Run both lint and validate (default workflow)."""
+    contract_path = Path(contract)
+
+    # Lint
+    lint_result = lint_contract(contract_path)
+
+    # Validate
+    progress_cb = None if json_output else print_progress
+    validate_result = validate_contract(contract_path, progress_callback=progress_cb)
+    if progress_cb:
+        click.echo()  # newline after progress
+
+    if json_output:
+        output = {
+            "ok": lint_result.ok and validate_result.ok,
+            "lint": lint_result.to_dict(),
+            "validate": validate_result.to_dict(),
+        }
+        click.echo(format_json(output))
+    else:
+        click.echo(format_human_lint(lint_result))
+        click.echo(format_human_validate(validate_result))
+
+    sys.exit(0 if (lint_result.ok and validate_result.ok) else 1)
+
+
+@main.command()
+@click.argument("contract", type=click.Path(exists=True))
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def lint(contract, json_output):
+    """Run fast AST-based safety checks only."""
+    result = lint_contract(Path(contract))
+
+    if json_output:
+        click.echo(format_json(result.to_dict()))
+    else:
+        click.echo(format_human_lint(result))
+
+    sys.exit(0 if result.ok else 1)
+
+
+@main.command()
+@click.argument("contract", type=click.Path(exists=True))
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def validate(contract, json_output):
+    """Run SDK-based semantic validation."""
+    progress_cb = None if json_output else print_progress
+    result = validate_contract(Path(contract), progress_callback=progress_cb)
+    if progress_cb:
+        click.echo()  # newline after progress
+
+    if json_output:
+        click.echo(format_json(result.to_dict()))
+    else:
+        click.echo(format_human_validate(result))
+
+    sys.exit(0 if result.ok else 1)
+
+
+@main.command()
+@click.argument("contract", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="Write schema to file")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON")
+def schema(contract, output, json_output):
+    """Extract ABI schema from contract."""
+    progress_cb = None if json_output else print_progress
+    result = validate_contract(Path(contract), progress_callback=progress_cb)
+    if progress_cb:
+        click.echo()  # newline after progress
+
+    if not result.ok:
+        if json_output:
+            click.echo(format_json({"ok": False, "errors": result.errors}))
+        else:
+            click.echo(format_human_validate(result))
+        sys.exit(1)
+
+    if output:
+        Path(output).write_text(json.dumps(result.schema, indent=2))
+        click.echo(f"Schema written to {output}")
+    elif json_output:
+        click.echo(format_json({"ok": True, "schema": result.schema}))
+    else:
+        click.echo(format_human_schema(result))
+
+    sys.exit(0)
+
+
+@main.command()
+@click.option("--version", "-v", "version", help="GenVM version (e.g., v0.2.12)")
+@click.option("--list", "list_versions", is_flag=True, help="List cached versions")
+def download(version, list_versions):
+    """Pre-download GenVM artifacts for offline use."""
+    if list_versions:
+        versions = list_cached_versions()
+        if versions:
+            click.echo("Cached versions:")
+            for v in versions:
+                click.echo(f"  {v}")
+        else:
+            click.echo("No cached versions")
+        return
+
+    if version is None:
+        click.echo("Fetching latest version...")
+        version = get_latest_version()
+        click.echo(f"Latest: {version}")
+
+    click.echo(f"Downloading GenVM {version}...")
+
+    def progress(downloaded: int, total: int):
+        if total > 0:
+            percent = min(100, downloaded * 100 // total)
+            mb_down = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            click.echo(f"\r  {mb_down:.1f}/{mb_total:.1f} MB ({percent}%)", nl=False)
+
+    try:
+        path = download_artifacts(version, progress_callback=progress)
+        click.echo()  # newline after progress
+        click.echo(f"✓ Downloaded to {path}")
+    except Exception as e:
+        click.echo()
+        click.echo(f"✗ Download failed: {e}", err=True)
+        sys.exit(3)
+
+
+def cli():
+    """Entry point that handles both legacy and modern invocation."""
+    if _is_legacy_invocation():
+        _run_legacy_lint()
+    else:
+        main()
+
+
+if __name__ == "__main__":
+    cli()
