@@ -107,6 +107,34 @@ def extract_sdk_paths(
     return paths
 
 
+def get_sdk_paths_from_genvmroot() -> list[Path] | None:
+    """
+    Get SDK paths from GENVMROOT environment variable if available.
+
+    This reuses GenVM artifacts already downloaded by studio/other tools.
+    Returns None if GENVMROOT is not set or SDK not found.
+    """
+    genvmroot = os.environ.get("GENVMROOT")
+    if not genvmroot:
+        return None
+
+    genvm_path = Path(genvmroot)
+    if not genvm_path.exists():
+        return None
+
+    # Studio layout: /genvm/runners/genlayer-py-std/src
+    sdk_path = genvm_path / "runners" / "genlayer-py-std" / "src"
+    if sdk_path.exists():
+        return [sdk_path]
+
+    # Alternative: /genvm/runners/py-lib-genlayer-std/src
+    alt_path = genvm_path / "runners" / "py-lib-genlayer-std" / "src"
+    if alt_path.exists():
+        return [alt_path]
+
+    return None
+
+
 def load_sdk(
     contract_path: Path,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -120,29 +148,37 @@ def load_sdk(
 
     Returns:
         The get_schema function from the SDK
+
+    Note:
+        If GENVMROOT env var is set, reuses SDK from that location
+        instead of downloading. This is useful in studio/CI environments.
     """
-    # 1. Parse contract header
-    dependencies = parse_contract_header(contract_path)
-
-    # 2. Download artifacts if needed
-    tarball_path = download_artifacts(progress_callback=progress_callback)
-
-    # 3. Extract SDK paths
-    sdk_paths = extract_sdk_paths(tarball_path, dependencies)
-
-    # 4. CRITICAL: Import numpy BEFORE SDK
+    # 1. CRITICAL: Import numpy BEFORE SDK
     # SDK's _internal/numpy.py only registers numpy types if numpy is already imported
     import numpy as np  # noqa: F401
 
-    # 5. Mock WASI
+    # 2. Mock WASI
     setup_wasi_mocks()
 
-    # 6. Add SDK to path
+    # 3. Try to use GENVMROOT if available (reuse studio's GenVM)
+    sdk_paths = get_sdk_paths_from_genvmroot()
+
+    if sdk_paths is None:
+        # 4. Parse contract header for version info
+        dependencies = parse_contract_header(contract_path)
+
+        # 5. Download artifacts if needed
+        tarball_path = download_artifacts(progress_callback=progress_callback)
+
+        # 6. Extract SDK paths
+        sdk_paths = extract_sdk_paths(tarball_path, dependencies)
+
+    # 7. Add SDK to path
     for path in reversed(sdk_paths):
         src_path = path / "src" if (path / "src").exists() else path
         sys.path.insert(0, str(src_path))
 
-    # 7. Import get_schema
+    # 8. Import get_schema
     from genlayer.py.get_schema import get_schema
 
     return get_schema
