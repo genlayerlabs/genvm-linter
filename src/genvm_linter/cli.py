@@ -365,7 +365,8 @@ def setup(version, contract, json_output):
 @click.argument("contract", type=click.Path(exists=True))
 @click.option("--json", "json_output", is_flag=True, help="Output JSON (agent-friendly)")
 @click.option("--strict", is_flag=True, help="Enable strict type checking mode")
-def typecheck(contract, json_output, strict):
+@click.option("--all", "show_all", is_flag=True, help="Show all errors (disable SDK-related suppressions)")
+def typecheck(contract, json_output, strict, show_all):
     """Run Pyright type checking with GenLayer SDK configured.
 
     Uses pyright (Pylance's open-source core) to type-check contracts
@@ -411,15 +412,20 @@ def typecheck(contract, json_output, strict):
 
     # Create temporary pyrightconfig.json
     # Note: "include" with absolute paths is ignored by pyright, so we pass file as argument
-    pyright_config = {
+    pyright_config: dict = {
         "extraPaths": extra_paths,
         "typeCheckingMode": "strict" if strict else "basic",
         "reportMissingModuleSource": False,
-        "reportAttributeAccessIssue": "none",  # SDK uses dynamic attrs
-        "reportArgumentType": "none",  # DynArray/list compat
-        "reportReturnType": "none",  # int/u256 NewType compat (runtime equivalent)
         "pythonVersion": "3.12",
     }
+
+    # Add SDK-related suppressions unless --all is specified
+    if not show_all:
+        pyright_config.update({
+            "reportAttributeAccessIssue": "none",  # SDK uses dynamic attrs
+            "reportArgumentType": "none",  # DynArray/list compat
+            "reportReturnType": "none",  # int/u256 NewType compat (runtime equivalent)
+        })
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(pyright_config, f)
