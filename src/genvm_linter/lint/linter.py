@@ -57,6 +57,7 @@ def lint_contract(contract_path: Path | str) -> LintResult:
                 "code": w.code,
                 "msg": w.msg,
                 "line": w.line,
+                "col": w.col,
             })
     else:
         checks_passed += 1
@@ -69,6 +70,7 @@ def lint_contract(contract_path: Path | str) -> LintResult:
                 "code": w.code,
                 "msg": w.msg,
                 "line": w.line,
+                "col": getattr(w, 'col', 0),
             })
     else:
         checks_passed += 1

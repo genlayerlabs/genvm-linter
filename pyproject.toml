@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genvm-linter"
-version = "0.5.2"
+version = "0.5.3"
 description = "Fast validation and schema extraction for GenLayer intelligent contracts"
 readme = "README.md"
 license = "MIT"
