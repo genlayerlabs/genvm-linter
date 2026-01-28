@@ -46,6 +46,45 @@ genvm-lint schema <contract.py> --json
 genvm-lint schema <contract.py> --output abi.json
 ```
 
+### Type check (Pyright/Pylance)
+```bash
+genvm-lint typecheck <contract.py>
+genvm-lint typecheck <contract.py> --json    # Agent-friendly output
+genvm-lint typecheck <contract.py> --strict  # Strict mode
+```
+
+Runs Pyright (Pylance's core) with SDK paths auto-configured. Catches:
+- Type mismatches
+- Missing attributes
+- Invalid method signatures
+- Undefined variables
+
+JSON output:
+```json
+{
+  "ok": true,
+  "diagnostics": [],
+  "summary": {"errors": 0, "warnings": 0, "info": 0}
+}
+```
+
+With errors:
+```json
+{
+  "ok": false,
+  "diagnostics": [
+    {
+      "file": "contract.py",
+      "severity": 1,
+      "message": "\"foo\" is not defined",
+      "rule": "reportUndefinedVariable",
+      "range": {"start": {"line": 10, "character": 4}}
+    }
+  ],
+  "summary": {"errors": 1, "warnings": 0, "info": 0}
+}
+```
+
 ### Pre-download GenVM artifacts
 ```bash
 genvm-lint download                    # Latest
