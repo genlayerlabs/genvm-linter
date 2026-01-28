@@ -1,6 +1,6 @@
 """GenLayer contract validation and schema extraction."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 # Backwards-compatible exports for studio integration
 from .linter import GenVMLinter

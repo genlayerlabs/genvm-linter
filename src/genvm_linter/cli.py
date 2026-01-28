@@ -296,8 +296,8 @@ def setup(version, contract, json_output):
     # Auto-detect version from contract header if provided
     if contract and not version:
         deps = parse_contract_header(Path(contract))
-        if "py-genlayer" in deps:
-            click.echo(f"Detected SDK from contract header", err=not json_output)
+        if not json_output and "py-genlayer" in deps:
+            click.echo("Detected SDK from contract header")
         # Will use version from tarball based on deps
 
     if version is None and not contract:
