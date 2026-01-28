@@ -25,7 +25,7 @@ from .validate.artifacts import (
 from .validate.sdk_loader import extract_sdk_paths, parse_contract_header
 
 # Subcommand names for detecting legacy mode
-SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs", "setup", "cache"}
+SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs", "setup", "cache", "typecheck"}
 
 
 def print_progress(downloaded: int, total: int):
@@ -359,6 +359,132 @@ def setup(version, contract, json_output):
             click.echo()
             click.echo(f"✗ Setup failed: {e}", err=True)
         sys.exit(1)
+
+
+@main.command()
+@click.argument("contract", type=click.Path(exists=True))
+@click.option("--json", "json_output", is_flag=True, help="Output JSON (agent-friendly)")
+@click.option("--strict", is_flag=True, help="Enable strict type checking mode")
+def typecheck(contract, json_output, strict):
+    """Run Pyright type checking with GenLayer SDK configured.
+
+    Uses pyright (Pylance's open-source core) to type-check contracts
+    with the correct SDK paths automatically configured.
+
+    Example:
+        genvm-lint typecheck contract.py --json
+    """
+    import subprocess
+    import tempfile
+
+    contract_path = Path(contract)
+
+    if not json_output:
+        click.echo(f"Type checking {contract_path.name}...")
+
+    # Parse contract header for SDK version
+    deps = parse_contract_header(contract_path)
+
+    # Download SDK if needed
+    def progress(downloaded: int, total: int):
+        if not json_output and total > 0:
+            percent = min(100, downloaded * 100 // total)
+            click.echo(f"\r  Downloading SDK: {percent}%", nl=False)
+
+    try:
+        tarball_path = download_artifacts(None, progress_callback=progress)
+        if not json_output and deps:
+            click.echo()  # newline after progress
+    except Exception as e:
+        if json_output:
+            click.echo(json.dumps({"ok": False, "error": f"Failed to download SDK: {e}"}))
+        else:
+            click.echo(f"Failed to download SDK: {e}", err=True)
+        sys.exit(1)
+
+    # Extract SDK paths
+    sdk_paths = extract_sdk_paths(tarball_path, deps)
+    extra_paths = []
+    for path in sdk_paths:
+        src_path = path / "src" if (path / "src").exists() else path
+        extra_paths.append(str(src_path))
+
+    # Create temporary pyrightconfig.json
+    pyright_config = {
+        "include": [str(contract_path.absolute())],
+        "extraPaths": extra_paths,
+        "typeCheckingMode": "strict" if strict else "basic",
+        "reportMissingModuleSource": False,
+        "reportAttributeAccessIssue": "none",  # SDK uses dynamic attrs
+        "reportArgumentType": "none",  # DynArray/list compat
+        "pythonVersion": "3.12",
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(pyright_config, f)
+        config_path = f.name
+
+    try:
+        # Run pyright
+        result = subprocess.run(
+            ["pyright", "--project", config_path, "--outputjson"],
+            capture_output=True,
+            text=True,
+        )
+
+        pyright_output = json.loads(result.stdout) if result.stdout else {}
+        diagnostics = pyright_output.get("generalDiagnostics", [])
+
+        # Filter to only show errors from the contract file (not SDK)
+        contract_diagnostics = [
+            d for d in diagnostics
+            if contract_path.name in d.get("file", "")
+        ]
+
+        if json_output:
+            output = {
+                "ok": len(contract_diagnostics) == 0,
+                "diagnostics": contract_diagnostics,
+                "summary": {
+                    "errors": sum(1 for d in contract_diagnostics if d.get("severity") == 1),
+                    "warnings": sum(1 for d in contract_diagnostics if d.get("severity") == 2),
+                    "info": sum(1 for d in contract_diagnostics if d.get("severity") == 3),
+                },
+            }
+            click.echo(json.dumps(output, indent=2))
+        else:
+            if not contract_diagnostics:
+                click.echo("✓ No type errors found")
+            else:
+                for d in contract_diagnostics:
+                    severity = {1: "error", 2: "warning", 3: "info"}.get(d.get("severity"), "?")
+                    line = d.get("range", {}).get("start", {}).get("line", 0) + 1
+                    msg = d.get("message", "")
+                    rule = d.get("rule", "")
+                    click.echo(f"{contract_path.name}:{line}: {severity}: {msg} [{rule}]")
+
+                errors = sum(1 for d in contract_diagnostics if d.get("severity") == 1)
+                warnings = sum(1 for d in contract_diagnostics if d.get("severity") == 2)
+                click.echo(f"\n{errors} error(s), {warnings} warning(s)")
+
+        sys.exit(0 if len(contract_diagnostics) == 0 else 1)
+
+    except FileNotFoundError:
+        msg = "pyright not found. Install with: pip install pyright"
+        if json_output:
+            click.echo(json.dumps({"ok": False, "error": msg}))
+        else:
+            click.echo(msg, err=True)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        msg = f"Failed to parse pyright output: {e}"
+        if json_output:
+            click.echo(json.dumps({"ok": False, "error": msg}))
+        else:
+            click.echo(msg, err=True)
+        sys.exit(1)
+    finally:
+        Path(config_path).unlink(missing_ok=True)
 
 
 @main.group()
