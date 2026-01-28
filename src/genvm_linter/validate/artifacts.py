@@ -157,3 +157,60 @@ def parse_runner_manifest(runner_path: Path) -> dict[str, str]:
             name, hash_val = dep.rsplit(":", 1)
             deps[name] = hash_val
     return deps
+
+
+def clean_cache(keep_versions: list[str] | None = None, keep_latest: bool = True) -> tuple[int, int]:
+    """
+    Clean cached GenVM artifacts.
+
+    Args:
+        keep_versions: List of versions to keep (e.g., ["v0.2.12"])
+        keep_latest: If True, always keep the latest version
+
+    Returns:
+        Tuple of (files_deleted, bytes_freed)
+    """
+    import shutil
+
+    keep = set(keep_versions or [])
+    if keep_latest:
+        try:
+            latest = get_latest_version()
+            keep.add(latest)
+        except Exception:
+            pass  # Network error, skip
+
+    files_deleted = 0
+    bytes_freed = 0
+
+    # Clean tarballs
+    for f in get_cache_dir().glob("genvm-universal-*.tar.xz"):
+        version = f.name.replace("genvm-universal-", "").replace(".tar.xz", "")
+        if version not in keep:
+            bytes_freed += f.stat().st_size
+            f.unlink()
+            files_deleted += 1
+
+    # Clean extracted directories
+    extracted_dir = get_cache_dir() / "extracted"
+    if extracted_dir.exists():
+        for d in extracted_dir.iterdir():
+            if d.is_dir() and d.name not in keep:
+                for f in d.rglob("*"):
+                    if f.is_file():
+                        bytes_freed += f.stat().st_size
+                        files_deleted += 1
+                shutil.rmtree(d)
+
+    # Clean stubs
+    stubs_dir = get_cache_dir() / "stubs"
+    if stubs_dir.exists():
+        for d in stubs_dir.iterdir():
+            if d.is_dir() and d.name not in keep:
+                for f in d.rglob("*"):
+                    if f.is_file():
+                        bytes_freed += f.stat().st_size
+                        files_deleted += 1
+                shutil.rmtree(d)
+
+    return files_deleted, bytes_freed

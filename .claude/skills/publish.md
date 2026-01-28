@@ -2,32 +2,44 @@
 
 Publish genvm-linter package to PyPI.
 
-## Steps
+## Auto Publish (Recommended)
 
-1. **Bump version** in both files:
-   - `pyproject.toml`
-   - `src/genvm_linter/__init__.py`
+GitHub Action publishes automatically on push to main when version changes.
 
-2. **Build**:
-   ```bash
-   cd /Users/edgars/Dev/genvm-linter-official
-   rm -rf dist && uv build
-   ```
+```bash
+cd /Users/edgars/Dev/genvm-linter-official
 
-3. **Publish**:
-   ```bash
-   PYPI_TOKEN=$(op item get 7jsql74ko65ehgy2vcvv4cwx6i --account yeagerai.1password.com --format json | jq -r '.fields[] | select(.id == "credential") | .value')
-   uv publish --token "$PYPI_TOKEN"
-   ```
+# Bump version in BOTH files
+# - pyproject.toml
+# - src/genvm_linter/__init__.py
 
-4. **Commit and push**:
-   ```bash
-   git add -A && git commit -m "Release vX.Y.Z" && git push
-   ```
+# Commit and push
+git add pyproject.toml src/genvm_linter/__init__.py
+git commit -m "Release v0.X.Y"
+git push origin main
+```
 
-## 1Password
+Action checks if version exists → publishes to PyPI if new.
 
-PyPI token stored in yeagerai.1password.com:
-- Item ID: `7jsql74ko65ehgy2vcvv4cwx6i`
-- Name: "API Token PyPi genvm-linter"
-- Vault: Engineering
+Monitor: https://github.com/genlayerlabs/genvm-linter/actions
+
+## Manual Publish (Fallback)
+
+If GitHub Action fails:
+
+```bash
+cd /Users/edgars/Dev/genvm-linter-official
+rm -rf dist && uv build
+
+PYPI_TOKEN=$(op read "op://Engineering/API Token PyPi genvm-linter/credential" --account yeagerai.1password.com)
+uv publish --token "$PYPI_TOKEN"
+```
+
+## GitHub Secret
+
+Required in repo Settings → Secrets → Actions:
+- `PYPI_API_TOKEN` - PyPI token
+
+## Links
+
+- PyPI: https://pypi.org/project/genvm-linter/

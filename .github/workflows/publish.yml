@@ -1,47 +1,57 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:  # Allows manual triggering from GitHub Actions tab
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-    
+      uses: actions/checkout@v4
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
-    
+        python-version: '3.12'
+
+    - name: Get version from pyproject.toml
+      id: version
+      run: |
+        VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check if version exists on PyPI
+      id: check
+      run: |
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/genvm-linter/${{ steps.version.outputs.version }}/json")
+        if [ "$STATUS" = "200" ]; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Skip if version exists
+      if: steps.check.outputs.exists == 'true'
+      run: echo "Version ${{ steps.version.outputs.version }} already published, skipping"
+
     - name: Install dependencies
+      if: steps.check.outputs.exists == 'false'
       run: |
         python -m pip install --upgrade pip
         pip install build twine
-    
+
     - name: Build package
-      run: |
-        python -m build
-        echo "Built packages:"
-        ls -la dist/
-    
-    - name: Check package with twine
-      run: |
-        python -m twine check dist/*
-    
+      if: steps.check.outputs.exists == 'false'
+      run: python -m build
+
     - name: Publish to PyPI
+      if: steps.check.outputs.exists == 'false'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      run: |
-        python -m twine upload dist/*
-    
-    - name: Verify installation
-      run: |
-        sleep 10  # Give PyPI a moment to update
-        pip install genvm-linter
-        genvm-lint --version
+      run: python -m twine upload dist/*

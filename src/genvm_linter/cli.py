@@ -17,13 +17,15 @@ from .output import (
 )
 from .validate import validate_contract
 from .validate.artifacts import (
+    clean_cache,
     download_artifacts,
     get_latest_version,
     list_cached_versions,
 )
+from .validate.sdk_loader import extract_sdk_paths, parse_contract_header
 
 # Subcommand names for detecting legacy mode
-SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs"}
+SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs", "setup", "cache"}
 
 
 def print_progress(downloaded: int, total: int):
@@ -240,7 +242,7 @@ def download(version, list_versions):
 @click.option("--output", "-o", type=click.Path(), help="Output directory for stubs")
 @click.option("--list", "list_versions", is_flag=True, help="List cached stub versions")
 def stubs(version, output, list_versions):
-    """Generate type stubs for IDE intellisense."""
+    """Generate type stubs for IDE intellisense (deprecated: use 'setup' instead)."""
     from .stubs import generate_stubs, list_cached_stubs, get_stubs_path
 
     if list_versions:
@@ -279,6 +281,146 @@ def stubs(version, output, list_versions):
         click.echo()
         click.echo(f"✗ Stub generation failed: {e}", err=True)
         sys.exit(1)
+
+
+@main.command()
+@click.option("--version", "-v", "version", help="GenVM version (e.g., v0.2.12)")
+@click.option("--contract", "-c", type=click.Path(exists=True), help="Contract file (auto-detect version)")
+@click.option("--json", "json_output", is_flag=True, help="Output JSON (for IDE integration)")
+def setup(version, contract, json_output):
+    """Download SDK and output paths for IDE intellisense.
+
+    Outputs extraPaths for Pylance configuration. Better than stubs because
+    you get hover docs, go-to-definition, and no "missing source" warnings.
+    """
+    # Auto-detect version from contract header if provided
+    if contract and not version:
+        deps = parse_contract_header(Path(contract))
+        if "py-genlayer" in deps:
+            click.echo(f"Detected SDK from contract header", err=not json_output)
+        # Will use version from tarball based on deps
+
+    if version is None and not contract:
+        if not json_output:
+            click.echo("Fetching latest version...")
+        version = get_latest_version()
+        if not json_output:
+            click.echo(f"Latest: {version}")
+
+    if not json_output:
+        click.echo(f"Setting up GenVM SDK...")
+
+    def progress(downloaded: int, total: int):
+        if not json_output and total > 0:
+            percent = min(100, downloaded * 100 // total)
+            mb_down = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            click.echo(f"\r  Downloading: {mb_down:.1f}/{mb_total:.1f} MB ({percent}%)", nl=False)
+
+    try:
+        # Download tarball
+        tarball_path = download_artifacts(version, progress_callback=progress)
+        if not json_output:
+            click.echo()  # newline after progress
+
+        # Parse contract for dependencies if provided
+        deps = parse_contract_header(Path(contract)) if contract else {}
+
+        # Extract SDK paths
+        sdk_paths = extract_sdk_paths(tarball_path, deps)
+
+        # Convert to src paths for Pylance
+        extra_paths = []
+        for path in sdk_paths:
+            src_path = path / "src" if (path / "src").exists() else path
+            extra_paths.append(str(src_path))
+
+        if json_output:
+            resolved_version = version or tarball_path.name.replace("genvm-universal-", "").replace(".tar.xz", "")
+            click.echo(json.dumps({
+                "ok": True,
+                "extraPaths": extra_paths,
+                "version": resolved_version,
+            }))
+        else:
+            click.echo("✓ SDK ready")
+            click.echo()
+            click.echo("Add to VS Code settings.json:")
+            click.echo('  "python.analysis.extraPaths": [')
+            for p in extra_paths:
+                click.echo(f'    "{p}",')
+            click.echo('  ],')
+            click.echo('  "python.analysis.reportMissingModuleSource": "none"')
+
+    except Exception as e:
+        if json_output:
+            click.echo(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            click.echo()
+            click.echo(f"✗ Setup failed: {e}", err=True)
+        sys.exit(1)
+
+
+@main.group()
+def cache():
+    """Manage cached GenVM artifacts."""
+    pass
+
+
+@cache.command(name="list")
+def cache_list():
+    """List cached versions."""
+    versions = list_cached_versions()
+    if versions:
+        click.echo("Cached versions:")
+        for v in versions:
+            click.echo(f"  {v}")
+    else:
+        click.echo("No cached versions")
+
+
+@cache.command(name="clean")
+@click.option("--keep", "-k", multiple=True, help="Versions to keep (can specify multiple)")
+@click.option("--all", "clean_all", is_flag=True, help="Remove all cached versions")
+@click.option("--dry-run", is_flag=True, help="Show what would be deleted")
+def cache_clean(keep, clean_all, dry_run):
+    """Remove old cached versions.
+
+    By default keeps the latest version. Use --all to remove everything.
+    """
+    keep_versions = list(keep) if keep else None
+    keep_latest = not clean_all
+
+    if dry_run:
+        versions = list_cached_versions()
+        if keep_latest:
+            try:
+                latest = get_latest_version()
+                click.echo(f"Would keep latest: {latest}")
+            except Exception:
+                pass
+        for v in versions:
+            if keep_versions and v in keep_versions:
+                click.echo(f"Would keep: {v}")
+            elif keep_latest:
+                try:
+                    latest = get_latest_version()
+                    if v == latest:
+                        continue
+                except Exception:
+                    pass
+                click.echo(f"Would delete: {v}")
+            else:
+                click.echo(f"Would delete: {v}")
+        return
+
+    files_deleted, bytes_freed = clean_cache(keep_versions, keep_latest)
+
+    if files_deleted > 0:
+        mb_freed = bytes_freed / (1024 * 1024)
+        click.echo(f"✓ Cleaned {files_deleted} files ({mb_freed:.1f} MB freed)")
+    else:
+        click.echo("Nothing to clean")
 
 
 def cli():
