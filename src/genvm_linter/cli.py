@@ -410,13 +410,14 @@ def typecheck(contract, json_output, strict):
         extra_paths.append(str(src_path))
 
     # Create temporary pyrightconfig.json
+    # Note: "include" with absolute paths is ignored by pyright, so we pass file as argument
     pyright_config = {
-        "include": [str(contract_path.absolute())],
         "extraPaths": extra_paths,
         "typeCheckingMode": "strict" if strict else "basic",
         "reportMissingModuleSource": False,
         "reportAttributeAccessIssue": "none",  # SDK uses dynamic attrs
         "reportArgumentType": "none",  # DynArray/list compat
+        "reportReturnType": "none",  # int/u256 NewType compat (runtime equivalent)
         "pythonVersion": "3.12",
     }
 
@@ -425,9 +426,9 @@ def typecheck(contract, json_output, strict):
         config_path = f.name
 
     try:
-        # Run pyright
+        # Run pyright with file as argument (not in config, since absolute paths are ignored)
         result = subprocess.run(
-            ["pyright", "--project", config_path, "--outputjson"],
+            ["pyright", "--project", config_path, str(contract_path.absolute()), "--outputjson"],
             capture_output=True,
             text=True,
         )
