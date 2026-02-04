@@ -136,9 +136,21 @@ def _get_suggestion(code: str) -> Optional[str]:
         "W001": "Remove the forbidden import. Use GenLayer SDK equivalents instead.",
         "W002": "Use deterministic alternatives from the GenLayer SDK.",
         "W003": "Use Decimal instead of float for deterministic arithmetic.",
-        "S001": "Add a contract header: # { \"Seq\": [{ \"Depends\": \"py-genlayer:...\" }] }",
-        "S002": "Ensure your contract class inherits from Contract base class.",
+        "W010": "Add contract header: # { \"Seq\": [{ \"Depends\": \"py-genlayer:...\" }] }",
+        "W011": "Add py-genlayer dependency to contract header.",
         "E010": "Wrap gl.nondet.* calls in gl.eq_principle.* or gl.vm.run_nondet() for consensus.",
+        "E011": "Move each contract class to its own file.",
+        "E012": "Remove @gl.public decorator from __init__ method.",
+        "E013": "Rename method to not start with '__' or make it private.",
+        "E014": "Add @allow_storage decorator to the class.",
+        "E015": "Use u256 or i256 instead of int for storage fields.",
+        "E016": "Use DynArray instead of list, TreeMap instead of dict.",
+        "E017": "Array size must be a positive integer Literal.",
+        "E018": "TreeMap keys must be Comparable (str, Address, u32, u256, etc.).",
+        "E019": "Add the required decorator for this special method.",
+        "W020": "Add return type annotation to view method for schema generation.",
+        "E021": "Remove *args/**kwargs from public method signature.",
+        "E022": "Add 'self' as first parameter.",
     }
     return suggestions.get(code)
 
