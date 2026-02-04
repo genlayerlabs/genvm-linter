@@ -138,6 +138,7 @@ def _get_suggestion(code: str) -> Optional[str]:
         "W003": "Use Decimal instead of float for deterministic arithmetic.",
         "S001": "Add a contract header: # { \"Seq\": [{ \"Depends\": \"py-genlayer:...\" }] }",
         "S002": "Ensure your contract class inherits from Contract base class.",
+        "E010": "Wrap gl.nondet.* calls in gl.eq_principle.* or gl.vm.run_nondet() for consensus.",
     }
     return suggestions.get(code)
 
