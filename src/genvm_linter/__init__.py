@@ -1,6 +1,8 @@
 """GenLayer contract validation and schema extraction."""
 
-__version__ = "0.6.1"
+from importlib.metadata import version as _get_version
+
+__version__ = _get_version("genvm-linter")
 
 # Backwards-compatible exports for studio integration
 from .linter import GenVMLinter
