@@ -135,7 +135,6 @@ def _get_suggestion(code: str) -> Optional[str]:
     suggestions = {
         "W001": "Remove the forbidden import. Use GenLayer SDK equivalents instead.",
         "W002": "Use deterministic alternatives from the GenLayer SDK.",
-        "W003": "Use Decimal instead of float for deterministic arithmetic.",
         "W010": "Add contract header: # { \"Seq\": [{ \"Depends\": \"py-genlayer:...\" }] }",
         "W011": "Add py-genlayer dependency to contract header.",
         "E010": "Wrap gl.nondet.* calls in gl.eq_principle.* or gl.vm.run_nondet() for consensus.",

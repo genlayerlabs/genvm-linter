@@ -107,17 +107,6 @@ class SafetyChecker(ast.NodeVisitor):
                 )
             )
 
-        # Check for float() which can cause non-determinism
-        if isinstance(node.func, ast.Name) and node.func.id == "float":
-            self.warnings.append(
-                SafetyWarning(
-                    code="W003",
-                    msg="Use of 'float' type (non-deterministic); use Decimal instead",
-                    line=node.lineno,
-                    col=node.col_offset,
-                )
-            )
-
         self.generic_visit(node)
 
     def _get_call_name(self, node: ast.Call) -> str:
