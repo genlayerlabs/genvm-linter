@@ -42,6 +42,29 @@ FORBIDDEN_CALLS = frozenset({
     "uuid.uuid4",
 })
 
+# Built-in Python exception types that should not be raised in contracts.
+# These crash the GenVM WASM runtime (generic exit_code 1), lose the error
+# message, break consensus, and break downstream error parsing.
+# Use gl.vm.UserError("message") instead.
+BUILTIN_EXCEPTIONS = frozenset({
+    "BaseException", "Exception", "ArithmeticError", "AssertionError",
+    "AttributeError", "BlockingIOError", "BrokenPipeError", "BufferError",
+    "ChildProcessError", "ConnectionAbortedError", "ConnectionError",
+    "ConnectionRefusedError", "ConnectionResetError", "EOFError",
+    "FileExistsError", "FileNotFoundError", "FloatingPointError",
+    "GeneratorExit", "IOError", "ImportError", "IndexError",
+    "InterruptedError", "IsADirectoryError", "KeyError",
+    "KeyboardInterrupt", "LookupError", "MemoryError",
+    "ModuleNotFoundError", "NameError", "NotADirectoryError",
+    "NotImplementedError", "OSError", "OverflowError", "PermissionError",
+    "ProcessLookupError", "RecursionError", "ReferenceError",
+    "RuntimeError", "StopAsyncIteration", "StopIteration", "SyntaxError",
+    "SystemError", "SystemExit", "TimeoutError", "TypeError",
+    "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError",
+    "UnicodeError", "UnicodeTranslateError", "ValueError",
+    "ZeroDivisionError",
+})
+
 
 @dataclass
 class SafetyWarning:
@@ -58,6 +81,29 @@ class SafetyChecker(ast.NodeVisitor):
 
     def __init__(self):
         self.warnings: list[SafetyWarning] = []
+        self._contract_depth: int = 0
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        is_contract = self._is_contract_class(node)
+        if is_contract:
+            self._contract_depth += 1
+        self.generic_visit(node)
+        if is_contract:
+            self._contract_depth -= 1
+
+    def visit_Raise(self, node: ast.Raise):
+        if self._contract_depth > 0 and node.exc is not None:
+            exc_name = self._get_exception_name(node.exc)
+            if exc_name in BUILTIN_EXCEPTIONS:
+                self.warnings.append(
+                    SafetyWarning(
+                        code="W004",
+                        msg=f"Bare Python exception '{exc_name}' in contract; use gl.vm.UserError(\"message\") instead",
+                        line=node.lineno,
+                        col=node.col_offset,
+                    )
+                )
+        self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
@@ -122,6 +168,24 @@ class SafetyChecker(ast.NodeVisitor):
             if isinstance(current, ast.Name):
                 parts.append(current.id)
             return ".".join(reversed(parts))
+        return ""
+
+    def _is_contract_class(self, node: ast.ClassDef) -> bool:
+        """Check if a class inherits from gl.Contract / genlayer.Contract / Contract."""
+        for base in node.bases:
+            if isinstance(base, ast.Attribute) and base.attr == "Contract":
+                if isinstance(base.value, ast.Name) and base.value.id in ("gl", "genlayer"):
+                    return True
+            if isinstance(base, ast.Name) and base.id == "Contract":
+                return True
+        return False
+
+    def _get_exception_name(self, node: ast.expr) -> str:
+        """Extract the exception class name from a raise target."""
+        if isinstance(node, ast.Call):
+            return self._get_exception_name(node.func)
+        if isinstance(node, ast.Name):
+            return node.id
         return ""
 
 
