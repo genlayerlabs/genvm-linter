@@ -14,6 +14,7 @@ class ValidationResult:
     ok: bool = False
     contract_name: str | None = None
     schema: dict[str, Any] | None = None
+    warnings: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -34,12 +35,15 @@ class ValidationResult:
             result["ctor_params"] = len(ctor.get("params", []))
         if self.errors:
             result["errors"] = self.errors
+        if self.warnings:
+            result["warnings"] = self.warnings
         return result
 
 
 def validate_contract(
     contract_path: Path | str,
     progress_callback: Callable[[int, int], None] | None = None,
+    soften_sdk_warnings: bool = False,
 ) -> ValidationResult:
     """
     Validate a GenLayer contract using SDK reflection.
@@ -47,6 +51,8 @@ def validate_contract(
     Args:
         contract_path: Path to the contract file
         progress_callback: Optional callback for download progress
+        soften_sdk_warnings: If True, known non-critical SDK type hints are surfaced
+            as warnings instead of hard validation failures.
 
     Returns:
         ValidationResult with schema or errors
@@ -117,6 +123,19 @@ def validate_contract(
             if match:
                 error["line"] = int(match.group(1))
 
+        if soften_sdk_warnings and _is_soft_sdk_warning(error_msg):
+            warning = {
+                "code": "W106",
+                "msg": f"Type warning: {error_msg}",
+            }
+            if "line" in error:
+                warning["line"] = error["line"]
+            return ValidationResult(
+                ok=True,
+                contract_name=contract_class.__name__,
+                warnings=[warning],
+            )
+
         return ValidationResult(ok=False, errors=[error])
     except Exception as e:
         return ValidationResult(
@@ -147,3 +166,9 @@ def extract_schema(
     """
     result = validate_contract(contract_path, progress_callback)
     return result.schema if result.ok else None
+
+
+def _is_soft_sdk_warning(error_msg: str) -> bool:
+    """Classify known advisory SDK type errors that should not block `check`."""
+    msg = error_msg.lower()
+    return "use of 'float' type" in msg and "use decimal instead" in msg

@@ -13,6 +13,11 @@ def format_human_lint(result: LintResult) -> str:
 
     if result.ok:
         lines.append(f"✓ Lint passed ({result.checks_passed} checks)")
+        if result.warnings:
+            lines.append("  Warnings:")
+            for w in result.warnings:
+                line_info = f"line {w['line']}: " if w.get("line") else ""
+                lines.append(f"    {line_info}{w['msg']}")
     else:
         lines.append("✗ Lint failed")
         for w in result.warnings:
@@ -35,6 +40,11 @@ def format_human_validate(result: ValidationResult) -> str:
             view_count = sum(1 for m in methods.values() if m.get("readonly", False))
             write_count = len(methods) - view_count
             lines.append(f"  Methods: {len(methods)} ({view_count} view, {write_count} write)")
+        if result.warnings:
+            lines.append("  Warnings:")
+            for w in result.warnings:
+                line_info = f"line {w['line']}: " if w.get("line") else ""
+                lines.append(f"    {line_info}{w['msg']}")
     else:
         lines.append("✗ Validation failed")
         for e in result.errors:
@@ -124,17 +134,27 @@ def format_vscode_json(lint_result: LintResult, validate_result: ValidationResul
             "column": w.get("col", 0),
         })
 
-    # Convert validation errors
-    if validate_result and not validate_result.ok:
-        for e in validate_result.errors:
-            error_count += 1
+    # Convert validation errors/warnings
+    if validate_result:
+        for w in validate_result.warnings:
+            warning_count += 1
             results.append({
-                "rule_id": e.get("code", "E000"),
-                "message": e.get("msg", "Validation error"),
-                "severity": "error",
-                "line": e.get("line", 1),
+                "rule_id": w.get("code", "W000"),
+                "message": w.get("msg", "Validation warning"),
+                "severity": "warning",
+                "line": w.get("line", 1),
                 "column": 0,
             })
+        if not validate_result.ok:
+            for e in validate_result.errors:
+                error_count += 1
+                results.append({
+                    "rule_id": e.get("code", "E000"),
+                    "message": e.get("msg", "Validation error"),
+                    "severity": "error",
+                    "line": e.get("line", 1),
+                    "column": 0,
+                })
 
     output = {
         "results": results,

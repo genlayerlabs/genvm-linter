@@ -87,8 +87,10 @@ def lint_contract(contract_path: Path | str) -> LintResult:
             "line": e.lineno or 1,
         })
 
+    has_errors = any(w.get("code", "").startswith("E") for w in all_warnings)
+
     return LintResult(
-        ok=len(all_warnings) == 0,
+        ok=not has_errors,
         checks_passed=checks_passed,
         warnings=all_warnings,
     )

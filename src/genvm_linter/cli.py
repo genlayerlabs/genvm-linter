@@ -118,7 +118,11 @@ def check_cmd(contract, json_output):
 
     # Validate
     progress_cb = None if json_output else print_progress
-    validate_result = validate_contract(contract_path, progress_callback=progress_cb)
+    validate_result = validate_contract(
+        contract_path,
+        progress_callback=progress_cb,
+        soften_sdk_warnings=True,
+    )
     if progress_cb:
         click.echo()  # newline after progress
 
