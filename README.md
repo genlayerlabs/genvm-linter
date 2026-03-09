@@ -24,12 +24,23 @@ genvm-lint validate contract.py
 genvm-lint schema contract.py
 genvm-lint schema contract.py --output abi.json
 
+# Pyright type checking with SDK auto-configured
+genvm-lint typecheck contract.py
+genvm-lint typecheck contract.py --strict      # Strict mode
+genvm-lint typecheck contract.py --all         # Show all errors (disable SDK suppressions)
+
+# IDE setup — download SDK and output extraPaths for Pylance
+genvm-lint setup                               # Latest version
+genvm-lint setup --contract contract.py        # Auto-detect version from header
+genvm-lint setup --version v0.2.12             # Specific version
+genvm-lint setup --json                        # JSON output for IDE integration
+
 # Pre-download GenVM artifacts
 genvm-lint download                    # Latest
 genvm-lint download --version v0.2.12  # Specific version
 genvm-lint download --list             # Show cached
 
-# Agent-friendly JSON output
+# JSON output (all commands)
 genvm-lint check contract.py --json
 ```
 
@@ -53,9 +64,32 @@ genvm-lint check contract.py --json
 - `2` - Contract file not found
 - `3` - SDK download failed
 
-## VS Code Extension
+## IDE Integration
+
+### VS Code Extension
 
 This linter is used by the [GenLayer VS Code Extension](https://github.com/genlayerlabs/vscode-extension) for real-time contract validation.
+
+### Manual Pylance Setup
+
+Use `genvm-lint setup` to configure Pylance with the correct SDK paths. This gives you hover docs, go-to-definition, and type checking without the extension.
+
+```bash
+genvm-lint setup --contract contract.py
+```
+
+Add the output paths to your VS Code `settings.json`:
+
+```json
+{
+  "python.analysis.extraPaths": ["<output paths>"],
+  "python.analysis.reportMissingModuleSource": "none"
+}
+```
+
+### Type Checking
+
+`genvm-lint typecheck` runs Pyright with the SDK auto-configured. By default it suppresses SDK-internal noise (dynamic attributes, NewType compat). Use `--all` to see everything, `--strict` for strict mode.
 
 ## Development
 
