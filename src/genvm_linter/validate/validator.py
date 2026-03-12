@@ -67,7 +67,7 @@ def validate_contract(
 
     # Load SDK
     try:
-        get_schema = load_sdk(contract_path, progress_callback)
+        get_schema, upgrade_notes = load_sdk(contract_path, progress_callback)
     except Exception as e:
         return ValidationResult(
             ok=False,
@@ -130,10 +130,13 @@ def validate_contract(
             }
             if "line" in error:
                 warning["line"] = error["line"]
+            all_warnings = [warning] + [
+                {"code": "I200", "msg": note} for note in upgrade_notes
+            ]
             return ValidationResult(
                 ok=True,
                 contract_name=contract_class.__name__,
-                warnings=[warning],
+                warnings=all_warnings,
             )
 
         return ValidationResult(ok=False, errors=[error])
@@ -143,10 +146,16 @@ def validate_contract(
             errors=[{"code": "E107", "msg": f"Schema extraction failed: {e}"}],
         )
 
+    # Add runner upgrade notes as info-level warnings
+    upgrade_warnings = [
+        {"code": "I200", "msg": note} for note in upgrade_notes
+    ]
+
     return ValidationResult(
         ok=True,
         contract_name=contract_class.__name__,
         schema=schema,
+        warnings=upgrade_warnings,
     )
 
 

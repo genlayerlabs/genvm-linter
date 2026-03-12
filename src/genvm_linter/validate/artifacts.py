@@ -77,6 +77,28 @@ def list_cached_versions() -> list[str]:
     return sorted(versions)
 
 
+def list_available_versions() -> list[dict]:
+    """Fetch all available GenVM release versions from GitHub.
+
+    Returns a list of dicts with 'tag', 'date', and 'prerelease' keys,
+    sorted newest first.
+    """
+    url = "https://api.github.com/repos/genlayerlabs/genvm/releases"
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+
+    return [
+        {
+            "tag": r["tag_name"],
+            "date": r["published_at"][:10],
+            "prerelease": r.get("prerelease", False),
+        }
+        for r in releases
+        if any(a["name"] == "genvm-universal.tar.xz" for a in r.get("assets", []))
+    ]
+
+
 def hash_to_tar_path(runner_type: str, hash_val: str) -> str:
     """
     Convert a dependency hash to the path inside genvm-universal.tar.xz.
@@ -90,18 +112,55 @@ def hash_to_tar_path(runner_type: str, hash_val: str) -> str:
     return f"runners/{runner_type}/{dir_prefix}/{file_suffix}.tar"
 
 
-def extract_runner(tarball_path: Path, runner_type: str, hash_val: str) -> Path:
-    """
-    Extract a specific runner from genvm-universal.tar.xz.
+def _get_runner_index(tarball_path: Path) -> dict[str, list[str]]:
+    """Get or build a cached index of runner members in the tarball.
 
-    Returns:
-        Path to extracted runner directory.
+    First call decompresses the tarball and saves the index as JSON.
+    Subsequent calls read the JSON file instantly.
+    """
+    index_path = tarball_path.with_suffix(tarball_path.suffix + ".index.json")
+    if index_path.exists():
+        return json.loads(index_path.read_text())
+
+    index: dict[str, list[str]] = {}
+    with tarfile.open(tarball_path, "r:xz") as tar:
+        for m in tar.getmembers():
+            if m.name.startswith("runners/") and m.name.endswith(".tar"):
+                parts = m.name.split("/")
+                if len(parts) >= 3:
+                    runner_type = parts[1]
+                    index.setdefault(runner_type, []).append(m.name)
+
+    index_path.write_text(json.dumps(index))
+    return index
+
+
+def find_latest_runner(tarball_path: Path, runner_type: str) -> str | None:
+    """Find the latest version hash for a runner type in the tarball.
+
+    Uses a cached index file — no tarball decompression after first call.
+    """
+    index = _get_runner_index(tarball_path)
+    runners = index.get(runner_type, [])
+
+    if runners:
+        latest = runners[-1]
+        parts = latest.replace(f"runners/{runner_type}/", "").replace(".tar", "")
+        dir_part, file_part = parts.split("/")
+        return dir_part + file_part
+    return None
+
+
+def extract_runner(tarball_path: Path, runner_type: str, hash_val: str) -> Path:
+    """Extract a specific runner from genvm-universal.tar.xz.
+
+    Only decompresses the tarball if the runner isn't already cached on disk.
     """
     version = tarball_path.stem.replace("genvm-universal-", "")
     extract_base = get_cache_dir() / "extracted" / version
     runner_path = extract_base / runner_type / hash_val
 
-    if runner_path.exists():
+    if runner_path.exists() and any(runner_path.iterdir()):
         return runner_path
 
     runner_path.mkdir(parents=True, exist_ok=True)
@@ -124,23 +183,6 @@ def extract_runner(tarball_path: Path, runner_type: str, hash_val: str) -> Path:
             import shutil
             shutil.rmtree(runner_path)
         raise
-
-
-def find_latest_runner(tarball_path: Path, runner_type: str) -> str | None:
-    """Find the latest version hash for a runner type in the tarball."""
-    with tarfile.open(tarball_path, "r:xz") as tar:
-        runners = [
-            m.name
-            for m in tar.getmembers()
-            if m.name.startswith(f"runners/{runner_type}/") and m.name.endswith(".tar")
-        ]
-
-        if runners:
-            latest = runners[-1]
-            parts = latest.replace(f"runners/{runner_type}/", "").replace(".tar", "")
-            dir_part, file_part = parts.split("/")
-            return dir_part + file_part
-    return None
 
 
 def parse_runner_manifest(runner_path: Path) -> dict[str, str]:

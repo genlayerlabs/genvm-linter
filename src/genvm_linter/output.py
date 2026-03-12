@@ -40,11 +40,16 @@ def format_human_validate(result: ValidationResult) -> str:
             view_count = sum(1 for m in methods.values() if m.get("readonly", False))
             write_count = len(methods) - view_count
             lines.append(f"  Methods: {len(methods)} ({view_count} view, {write_count} write)")
-        if result.warnings:
+        warnings = [w for w in result.warnings if not w.get("code", "").startswith("I")]
+        notes = [w for w in result.warnings if w.get("code", "").startswith("I")]
+        if warnings:
             lines.append("  Warnings:")
-            for w in result.warnings:
+            for w in warnings:
                 line_info = f"line {w['line']}: " if w.get("line") else ""
                 lines.append(f"    {line_info}{w['msg']}")
+        if notes:
+            for n in notes:
+                lines.append(f"  ℹ {n['msg']}")
     else:
         lines.append("✗ Validation failed")
         for e in result.errors:

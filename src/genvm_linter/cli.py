@@ -20,6 +20,7 @@ from .validate.artifacts import (
     clean_cache,
     download_artifacts,
     get_latest_version,
+    list_available_versions,
     list_cached_versions,
 )
 from .validate.sdk_loader import extract_sdk_paths, parse_contract_header
@@ -205,8 +206,24 @@ def schema(contract, output, json_output):
 @main.command()
 @click.option("--version", "-v", "version", help="GenVM version (e.g., v0.2.12)")
 @click.option("--list", "list_versions", is_flag=True, help="List cached versions")
-def download(version, list_versions):
+@click.option("--available", is_flag=True, help="List all available versions from GitHub")
+def download(version, list_versions, available):
     """Pre-download GenVM artifacts for offline use."""
+    if available:
+        try:
+            releases = list_available_versions()
+            if releases:
+                click.echo("Available GenVM versions:")
+                for r in releases:
+                    pre = " (pre-release)" if r["prerelease"] else ""
+                    click.echo(f"  {r['tag']}  {r['date']}{pre}")
+            else:
+                click.echo("No releases found with genvm-universal.tar.xz")
+        except Exception as e:
+            click.echo(f"Failed to fetch versions: {e}", err=True)
+            sys.exit(1)
+        return
+
     if list_versions:
         versions = list_cached_versions()
         if versions:
@@ -331,7 +348,7 @@ def setup(version, contract, json_output):
         deps = parse_contract_header(Path(contract)) if contract else {}
 
         # Extract SDK paths
-        sdk_paths = extract_sdk_paths(tarball_path, deps)
+        sdk_paths, _upgrade_notes = extract_sdk_paths(tarball_path, deps)
 
         # Convert to src paths for Pylance
         extra_paths = []
@@ -408,7 +425,7 @@ def typecheck(contract, json_output, strict, show_all):
         sys.exit(1)
 
     # Extract SDK paths
-    sdk_paths = extract_sdk_paths(tarball_path, deps)
+    sdk_paths, _upgrade_notes = extract_sdk_paths(tarball_path, deps)
     extra_paths = []
     for path in sdk_paths:
         src_path = path / "src" if (path / "src").exists() else path

@@ -60,20 +60,29 @@ def setup_wasi_mocks():
 def extract_sdk_paths(
     tarball_path: Path,
     dependencies: dict[str, str],
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """
     Extract SDK components needed for the contract.
 
-    Resolution:
-    1. Get py-genlayer runner manifest
-    2. Extract py-lib-genlayer-std with exact version from manifest
-    3. Extract embeddings if needed
+    Opens the tarball once and performs all extractions / lookups
+    through a single decompression pass.
+
+    Returns:
+        Tuple of (sdk_paths, upgrade_notes).
     """
     paths = []
+    notes = []
+    _SPECIAL_HASHES = {"test", "latest"}
 
     # 1. Resolve py-genlayer runner
-    if "py-genlayer" in dependencies:
+    if "py-genlayer" in dependencies and dependencies["py-genlayer"] not in _SPECIAL_HASHES:
         genlayer_hash = dependencies["py-genlayer"]
+        latest_hash = find_latest_runner(tarball_path, "py-genlayer")
+        if latest_hash and latest_hash != genlayer_hash:
+            notes.append(
+                f"py-genlayer: a newer runner is available ({latest_hash}). "
+                f"See https://github.com/genlayerlabs/genvm/releases for changes."
+            )
     else:
         genlayer_hash = find_latest_runner(tarball_path, "py-genlayer")
         if not genlayer_hash:
@@ -101,10 +110,21 @@ def extract_sdk_paths(
     # 5. Extract embeddings if contract uses it
     if "py-lib-genlayer-embeddings" in dependencies:
         emb_hash = dependencies["py-lib-genlayer-embeddings"]
+        if emb_hash in _SPECIAL_HASHES:
+            emb_hash = find_latest_runner(tarball_path, "py-lib-genlayer-embeddings")
+            if not emb_hash:
+                raise RuntimeError("Could not find py-lib-genlayer-embeddings in release")
+        else:
+            latest_emb = find_latest_runner(tarball_path, "py-lib-genlayer-embeddings")
+            if latest_emb and latest_emb != emb_hash:
+                notes.append(
+                    f"py-lib-genlayer-embeddings: a newer runner is available ({latest_emb}). "
+                    f"See https://github.com/genlayerlabs/genvm/releases for changes."
+                )
         emb_path = extract_runner(tarball_path, "py-lib-genlayer-embeddings", emb_hash)
         paths.append(emb_path)
 
-    return paths
+    return paths, notes
 
 
 def get_sdk_paths_from_genvmroot() -> list[Path] | None:
@@ -138,7 +158,7 @@ def get_sdk_paths_from_genvmroot() -> list[Path] | None:
 def load_sdk(
     contract_path: Path,
     progress_callback: Callable[[int, int], None] | None = None,
-) -> Callable[[type], dict[str, Any]]:
+) -> tuple[Callable[[type], dict[str, Any]], list[str]]:
     """
     Load GenLayer SDK for contract validation.
 
@@ -147,7 +167,7 @@ def load_sdk(
         progress_callback: Optional callback for download progress
 
     Returns:
-        The get_schema function from the SDK
+        Tuple of (get_schema function, upgrade_notes list)
 
     Note:
         If GENVMROOT env var is set, reuses SDK from that location
@@ -162,6 +182,7 @@ def load_sdk(
 
     # 3. Try to use GENVMROOT if available (reuse studio's GenVM)
     sdk_paths = get_sdk_paths_from_genvmroot()
+    upgrade_notes: list[str] = []
 
     if sdk_paths is None:
         # 4. Parse contract header for version info
@@ -171,7 +192,7 @@ def load_sdk(
         tarball_path = download_artifacts(progress_callback=progress_callback)
 
         # 6. Extract SDK paths
-        sdk_paths = extract_sdk_paths(tarball_path, dependencies)
+        sdk_paths, upgrade_notes = extract_sdk_paths(tarball_path, dependencies)
 
     # 7. Add SDK to path
     for path in reversed(sdk_paths):
@@ -181,7 +202,7 @@ def load_sdk(
     # 8. Import get_schema
     from genlayer.py.get_schema import get_schema
 
-    return get_schema
+    return get_schema, upgrade_notes
 
 
 def load_contract_module(contract_path: Path):
