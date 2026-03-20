@@ -151,6 +151,9 @@ def _get_suggestion(code: str) -> Optional[str]:
         "E021": "Remove *args/**kwargs from public method signature.",
         "E022": "Add 'self' as first parameter.",
         "E023": "Move .emit() call outside the leader/validator function. Message emission cannot happen inside non-deterministic contexts.",
+        "E024": "Move contract call outside the leader/validator function. Inter-contract calls cannot happen inside non-deterministic contexts.",
+        "E025": "Cannot nest run_nondet/eq_principle inside a non-deterministic block.",
+        "E026": "Move storage write outside the leader/validator function. Storage writes cannot happen inside non-deterministic contexts.",
     }
     return suggestions.get(code)
 

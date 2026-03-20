@@ -467,13 +467,59 @@ def is_reachable(call_graph: dict[str, set[str]], sources: set[str], target: str
     return False
 
 
-class EmitCallFinder(ast.NodeVisitor):
-    """Find all .emit() calls and their containing function."""
+# Calls that spawn non-deterministic blocks
+NONDET_SPAWN_CALLS = frozenset({
+    "gl.vm.run_nondet",
+    "gl.vm.run_nondet_unsafe",
+    "gl.eq_principle.strict_eq",
+    "gl.eq_principle.prompt_comparative",
+    "gl.eq_principle.prompt_non_comparative",
+})
 
-    def __init__(self):
-        self.emit_calls: list[tuple[str | None, int, int]] = []  # (func_name, line, col)
+# Calls that access other contracts
+CONTRACT_ACCESS_CALLS = frozenset({
+    "gl.get_contract_at",
+    "genlayer.get_contract_at",
+})
+
+# Error messages per code
+_NONDET_MESSAGES = {
+    "E023": "message emission is forbidden in non-deterministic contexts",
+    "E024": "inter-contract calls are forbidden in non-deterministic contexts",
+    "E025": "nested non-deterministic blocks are forbidden",
+    "E026": "storage writes are forbidden in non-deterministic contexts",
+}
+
+
+def _find_evm_interface_classes(tree: ast.Module) -> set[str]:
+    """Find class names decorated with @gl.evm.contract_interface."""
+    classes = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for dec in node.decorator_list:
+            parts = []
+            current = dec
+            while isinstance(current, ast.Attribute):
+                parts.append(current.attr)
+                current = current.value
+            if isinstance(current, ast.Name):
+                parts.append(current.id)
+                name = ".".join(reversed(parts))
+                if name in ("gl.evm.contract_interface", "genlayer.evm.contract_interface"):
+                    classes.add(node.name)
+    return classes
+
+
+class ForbiddenInNondetFinder(ast.NodeVisitor):
+    """Find operations that are forbidden inside non-deterministic blocks."""
+
+    def __init__(self, evm_interface_classes: set[str]):
+        # (code, description, func_name, line, col)
+        self.findings: list[tuple[str, str, str | None, int, int]] = []
         self.current_class: str | None = None
         self.function_stack: list[str] = []
+        self.evm_interface_classes = evm_interface_classes
 
     def _get_qualified_name(self, name: str) -> str:
         if self.function_stack:
@@ -484,6 +530,12 @@ class EmitCallFinder(ast.NodeVisitor):
 
     def _get_current_scope(self) -> str | None:
         return self.function_stack[-1] if self.function_stack else None
+
+    def _add(self, code: str, desc: str, node: ast.expr | ast.stmt):
+        self.findings.append((
+            code, desc, self._get_current_scope(),
+            node.lineno, node.col_offset,
+        ))
 
     def visit_ClassDef(self, node: ast.ClassDef):
         old_class = self.current_class
@@ -504,59 +556,104 @@ class EmitCallFinder(ast.NodeVisitor):
         self.function_stack.pop()
 
     def visit_Call(self, node: ast.Call):
+        # E023: .emit()
         if isinstance(node.func, ast.Attribute) and node.func.attr == "emit":
-            self.emit_calls.append((
-                self._get_current_scope(),
-                node.lineno,
-                node.col_offset,
-            ))
+            self._add("E023", ".emit()", node)
+
+        call_name = self._get_full_call_name(node)
+
+        # E024: gl.get_contract_at()
+        if call_name in CONTRACT_ACCESS_CALLS:
+            self._add("E024", call_name + "()", node)
+
+        # E024: EVM interface instantiation
+        if isinstance(node.func, ast.Name) and node.func.id in self.evm_interface_classes:
+            self._add("E024", f"{node.func.id}(...)", node)
+
+        # E025: nested run_nondet / eq_principle
+        if call_name in NONDET_SPAWN_CALLS:
+            self._add("E025", call_name + "()", node)
+
         self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign):
+        for target in node.targets:
+            field = self._self_storage_field(target)
+            if field:
+                self._add("E026", f"self.{field}", node)
+                break
+        self.generic_visit(node)
 
-def check_emit_in_eq_principle(source: str) -> list[SafetyWarning]:
+    def visit_AugAssign(self, node: ast.AugAssign):
+        field = self._self_storage_field(node.target)
+        if field:
+            self._add("E026", f"self.{field}", node)
+        self.generic_visit(node)
+
+    def _self_storage_field(self, node: ast.expr) -> str | None:
+        """If node is self.xxx or self.xxx[...], return the field name."""
+        if isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id == "self":
+                return node.attr
+        if isinstance(node, ast.Subscript):
+            return self._self_storage_field(node.value)
+        return None
+
+    def _get_full_call_name(self, node: ast.Call) -> str | None:
+        parts = []
+        current = node.func
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+            return ".".join(reversed(parts))
+        return None
+
+
+def check_forbidden_in_nondet(source: str) -> list[SafetyWarning]:
     """
-    Check for .emit() calls inside equivalence principle / nondet blocks.
+    Check for operations forbidden inside non-deterministic blocks.
 
-    Contract message emission is valid in normal contract methods but not
-    inside leader/validator functions, because emit has side effects that
-    must not run during non-deterministic consensus evaluation.
+    Detects .emit(), inter-contract calls, nested run_nondet, and storage
+    writes that are reachable from leader/validator functions.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
 
-    # Build call graph
-    cg_builder = CallGraphBuilder()
-    cg_builder.visit(tree)
-    call_graph = cg_builder.calls
+    # Find EVM interface classes first
+    evm_classes = _find_evm_interface_classes(tree)
 
-    # Find all .emit() calls
-    emit_finder = EmitCallFinder()
-    emit_finder.visit(tree)
-    emit_calls = emit_finder.emit_calls
+    # Find all forbidden operations
+    finder = ForbiddenInNondetFinder(evm_classes)
+    finder.visit(tree)
 
-    if not emit_calls:
+    if not finder.findings:
         return []
 
-    # Find safe entry points (eq principle / run_nondet blocks)
+    # Find nondet entry points
     entry_finder = SafeEntryPointFinder()
     entry_finder.visit(tree)
-    safe_functions = entry_finder.safe_functions
-    lambda_scopes = entry_finder.lambda_scopes
-    all_safe = safe_functions | lambda_scopes
+    all_safe = entry_finder.safe_functions | entry_finder.lambda_scopes
 
     if not all_safe:
         return []
 
+    # Build call graph for reachability
+    cg_builder = CallGraphBuilder()
+    cg_builder.visit(tree)
+    call_graph = cg_builder.calls
+
     warnings = []
-    for func_name, line, col in emit_calls:
+    for code, desc, func_name, line, col in finder.findings:
         if func_name is None:
-            continue  # Module-level emit is fine (not in eq principle)
+            continue  # Module-level — not in a nondet block
         if is_reachable(call_graph, all_safe, func_name):
             warnings.append(SafetyWarning(
-                code="E023",
-                msg=f".emit() in '{func_name}' is reachable from equivalence principle block; contracts cannot send messages inside non-deterministic contexts",
+                code=code,
+                msg=f"{desc} in '{func_name}' reachable from non-deterministic block; {_NONDET_MESSAGES[code]}",
                 line=line,
                 col=col,
             ))
@@ -641,7 +738,7 @@ def check_safety(source: str | Path) -> list[SafetyWarning]:
     # Add nondet-outside-eq-principle check
     nondet_warnings = check_nondet_outside_eq_principle(source)
 
-    # Add emit-in-eq-principle check
-    emit_warnings = check_emit_in_eq_principle(source)
+    # Add checks for operations forbidden inside nondet blocks
+    forbidden_warnings = check_forbidden_in_nondet(source)
 
-    return checker.warnings + nondet_warnings + emit_warnings
+    return checker.warnings + nondet_warnings + forbidden_warnings
