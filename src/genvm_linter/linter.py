@@ -150,6 +150,7 @@ def _get_suggestion(code: str) -> Optional[str]:
         "W020": "Add return type annotation to view method for schema generation.",
         "E021": "Remove *args/**kwargs from public method signature.",
         "E022": "Add 'self' as first parameter.",
+        "E023": "Move .emit() call outside the leader/validator function. Message emission cannot happen inside non-deterministic contexts.",
     }
     return suggestions.get(code)
 

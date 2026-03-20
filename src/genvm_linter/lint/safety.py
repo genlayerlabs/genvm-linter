@@ -467,6 +467,103 @@ def is_reachable(call_graph: dict[str, set[str]], sources: set[str], target: str
     return False
 
 
+class EmitCallFinder(ast.NodeVisitor):
+    """Find all .emit() calls and their containing function."""
+
+    def __init__(self):
+        self.emit_calls: list[tuple[str | None, int, int]] = []  # (func_name, line, col)
+        self.current_class: str | None = None
+        self.function_stack: list[str] = []
+
+    def _get_qualified_name(self, name: str) -> str:
+        if self.function_stack:
+            return f"{self.function_stack[-1]}.<locals>.{name}"
+        if self.current_class:
+            return f"{self.current_class}.{name}"
+        return name
+
+    def _get_current_scope(self) -> str | None:
+        return self.function_stack[-1] if self.function_stack else None
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        old_class = self.current_class
+        self.current_class = node.name
+        self.generic_visit(node)
+        self.current_class = old_class
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        func_name = self._get_qualified_name(node.name)
+        self.function_stack.append(func_name)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        func_name = self._get_qualified_name(node.name)
+        self.function_stack.append(func_name)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_Call(self, node: ast.Call):
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "emit":
+            self.emit_calls.append((
+                self._get_current_scope(),
+                node.lineno,
+                node.col_offset,
+            ))
+        self.generic_visit(node)
+
+
+def check_emit_in_eq_principle(source: str) -> list[SafetyWarning]:
+    """
+    Check for .emit() calls inside equivalence principle / nondet blocks.
+
+    Contract message emission is valid in normal contract methods but not
+    inside leader/validator functions, because emit has side effects that
+    must not run during non-deterministic consensus evaluation.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    # Build call graph
+    cg_builder = CallGraphBuilder()
+    cg_builder.visit(tree)
+    call_graph = cg_builder.calls
+
+    # Find all .emit() calls
+    emit_finder = EmitCallFinder()
+    emit_finder.visit(tree)
+    emit_calls = emit_finder.emit_calls
+
+    if not emit_calls:
+        return []
+
+    # Find safe entry points (eq principle / run_nondet blocks)
+    entry_finder = SafeEntryPointFinder()
+    entry_finder.visit(tree)
+    safe_functions = entry_finder.safe_functions
+    lambda_scopes = entry_finder.lambda_scopes
+    all_safe = safe_functions | lambda_scopes
+
+    if not all_safe:
+        return []
+
+    warnings = []
+    for func_name, line, col in emit_calls:
+        if func_name is None:
+            continue  # Module-level emit is fine (not in eq principle)
+        if is_reachable(call_graph, all_safe, func_name):
+            warnings.append(SafetyWarning(
+                code="E023",
+                msg=f".emit() in '{func_name}' is reachable from equivalence principle block; contracts cannot send messages inside non-deterministic contexts",
+                line=line,
+                col=col,
+            ))
+
+    return warnings
+
+
 def check_nondet_outside_eq_principle(source: str) -> list[SafetyWarning]:
     """
     Check for gl.nondet.* calls that are not in equivalence principle blocks.
@@ -544,4 +641,7 @@ def check_safety(source: str | Path) -> list[SafetyWarning]:
     # Add nondet-outside-eq-principle check
     nondet_warnings = check_nondet_outside_eq_principle(source)
 
-    return checker.warnings + nondet_warnings
+    # Add emit-in-eq-principle check
+    emit_warnings = check_emit_in_eq_principle(source)
+
+    return checker.warnings + nondet_warnings + emit_warnings
