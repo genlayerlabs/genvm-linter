@@ -98,7 +98,11 @@ class GenVMLinter:
         # Safety checks (forbidden imports, non-determinism)
         safety_warnings = check_safety(source_code)
         for w in safety_warnings:
-            severity = Severity.ERROR if w.code.startswith("E") else Severity.WARNING
+            severity = Severity.ERROR if (
+                w.code.startswith("E")
+                or w.code == "GL-S03"
+                or (w.code == "GL-S02" and w.msg.startswith("[HIGH RISK]"))
+            ) else Severity.WARNING
             results.append(
                 ValidationResult(
                     rule_id=w.code,
@@ -114,7 +118,9 @@ class GenVMLinter:
         # Structure checks (contract class, decorators)
         structure_warnings = check_structure(source_code)
         for w in structure_warnings:
-            severity = Severity.ERROR if w.code.startswith("E") else Severity.WARNING
+            severity = Severity.ERROR if (
+                w.code.startswith("E") or w.code == "GL-S03"
+            ) else Severity.WARNING
             results.append(
                 ValidationResult(
                     rule_id=w.code,
