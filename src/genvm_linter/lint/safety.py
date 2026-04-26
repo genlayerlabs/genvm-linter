@@ -1,6 +1,7 @@
 """AST-based safety checks for forbidden imports and non-deterministic patterns."""
 
 import ast
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -741,4 +742,361 @@ def check_safety(source: str | Path) -> list[SafetyWarning]:
     # Add checks for operations forbidden inside nondet blocks
     forbidden_warnings = check_forbidden_in_nondet(source)
 
-    return checker.warnings + nondet_warnings + forbidden_warnings
+    # Semantic prompt and eq_principle quality checks
+    semantic_warnings = (
+        check_vague_prompts(source)
+        + check_weak_eq_criteria(source)
+        + check_eq_strict_mismatch(source)
+    )
+
+    return checker.warnings + nondet_warnings + forbidden_warnings + semantic_warnings
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for semantic rules (GL-S01, GL-S02, GL-S03)
+# ---------------------------------------------------------------------------
+
+
+def _full_call_name(node: ast.Call) -> str:
+    """Return the full dotted name of a call, e.g. 'gl.eq_principle.strict_eq'."""
+    parts: list[str] = []
+    current: ast.expr = node.func
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _extract_str(node: ast.expr) -> str | None:
+    """Extract text from a string Constant or an f-string JoinedStr."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for part in node.values:
+            if isinstance(part, ast.Constant):
+                parts.append(str(part.value))
+            else:
+                parts.append("{expr}")
+        return "".join(parts)
+    return None
+
+
+def _is_exec_prompt(node: ast.Call) -> bool:
+    name = _full_call_name(node)
+    return name == "exec_prompt" or name.endswith(".exec_prompt")
+
+
+# ---------------------------------------------------------------------------
+# GL-S01: Vague prompt language
+# ---------------------------------------------------------------------------
+
+AMBIGUITY_MARKERS = [
+    "fair", "unfair", "reasonable", "appropriate", "good", "bad",
+    "acceptable", "deserves", "worthy", "suitable", "assess",
+    "evaluate", "determine if", "decide if", "judge whether",
+]
+
+_CRITERIA_SIGNALS = frozenset({
+    "if ", "when ", "≤", "≥", ">", "<",
+    "return yes/no", "yes/no", "return yes", "return no",
+})
+
+
+def _has_criteria_language(text: str) -> bool:
+    lower = text.lower()
+    return any(s in lower for s in _CRITERIA_SIGNALS)
+
+
+def _response_format_value(node: ast.Call) -> str | None:
+    """Return response_format kwarg value, '__other__' if not a str literal, or None if absent."""
+    for kw in node.keywords:
+        if kw.arg == "response_format":
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return kw.value.value
+            return "__other__"
+    return None
+
+
+def _check_response_format_in_func(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[SafetyWarning]:
+    """Best-effort: flag exec_prompt with absent/text response_format used in conditions."""
+    # Collect assignments: var = exec_prompt(...)
+    prompt_assignments: dict[str, tuple[ast.Call, int, int]] = {}
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Assign):
+            if (
+                len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and _is_exec_prompt(node.value)
+            ):
+                var = node.targets[0].id
+                prompt_assignments[var] = (node.value, node.value.lineno, node.value.col_offset)
+        elif isinstance(node, ast.AnnAssign):
+            if (
+                isinstance(node.target, ast.Name)
+                and node.value
+                and isinstance(node.value, ast.Call)
+                and _is_exec_prompt(node.value)
+            ):
+                var = node.target.id
+                prompt_assignments[var] = (node.value, node.value.lineno, node.value.col_offset)
+
+    if not prompt_assignments:
+        return []
+
+    # Collect variables referenced inside conditional tests
+    conditional_vars: set[str] = set()
+    for node in ast.walk(func_node):
+        test: ast.expr | None = None
+        if isinstance(node, (ast.If, ast.While)):
+            test = node.test
+        elif isinstance(node, ast.IfExp):
+            test = node.test
+        if test is not None:
+            for n in ast.walk(test):
+                if isinstance(n, ast.Name):
+                    conditional_vars.add(n.id)
+
+    warnings: list[SafetyWarning] = []
+    for var in conditional_vars:
+        if var not in prompt_assignments:
+            continue
+        call_node, line, col = prompt_assignments[var]
+        rf = _response_format_value(call_node)
+        if rf is None or rf == "text":
+            warnings.append(
+                SafetyWarning(
+                    code="GL-S01",
+                    msg=(
+                        f"exec_prompt on line {line} feeds into conditional logic "
+                        f"but has no structured response_format. "
+                        f"Add response_format=bool or a Pydantic model."
+                    ),
+                    line=line,
+                    col=col,
+                )
+            )
+    return warnings
+
+
+def check_vague_prompts(source: str) -> list[SafetyWarning]:
+    """Check for vague language in exec_prompt calls (GL-S01)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    warnings: list[SafetyWarning] = []
+
+    # Check all exec_prompt calls for ambiguity markers
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_exec_prompt(node):
+            continue
+        if not node.args:
+            continue
+        prompt_str = _extract_str(node.args[0])
+        if prompt_str is None:
+            continue
+        lower = prompt_str.lower()
+        if any(m in lower for m in AMBIGUITY_MARKERS) and not _has_criteria_language(prompt_str):
+            warnings.append(
+                SafetyWarning(
+                    code="GL-S01",
+                    msg=(
+                        f"Vague prompt on line {node.lineno}: prompt contains ambiguous terms "
+                        f"without explicit criteria. Add specific conditions "
+                        f"(e.g., 'return YES/NO if X', numeric thresholds, rubric)."
+                    ),
+                    line=node.lineno,
+                    col=node.col_offset,
+                )
+            )
+
+    # Per-function: flag missing structured response_format when result is in conditions
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            warnings.extend(_check_response_format_in_func(node))
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
+# GL-S02: Weak eq_principle criteria
+# ---------------------------------------------------------------------------
+
+_WEAK_ADJECTIVES = frozenset({
+    "similar", "equivalent", "same", "match", "matching", "equal", "like",
+})
+_NUMERIC_RE = re.compile(r"\d+|[≤≥%]|\bpercent\b|\bgreater\b|\bless\b|\bat least\b|\bat most\b")
+_CONDITIONAL_WORDS = frozenset({
+    "if", "when", "unless", "until", "condition", "yes", "no",
+})
+_CATEGORY_RE = re.compile(r"\b(one of|any of|among|either)\b|,", re.IGNORECASE)
+
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "be", "to", "of", "in", "it",
+    "that", "for", "and", "or", "with", "by", "on", "at",
+})
+
+
+def _score_criteria_weakness(text: str) -> tuple[str, str] | None:
+    """Return (level, reason) where level is 'HIGH' or 'MEDIUM', or None if acceptable."""
+    words = [w.strip(".,!?:;\"'") for w in text.split() if w.strip(".,!?:;\"'")]
+    word_count = len(words)
+
+    if word_count < 10:
+        plural = "s" if word_count != 1 else ""
+        return ("HIGH", f"criteria is too short ({word_count} word{plural})")
+
+    lower_words = {w.lower() for w in words}
+    meaningful = lower_words - _STOP_WORDS
+    if meaningful and meaningful.issubset(_WEAK_ADJECTIVES):
+        return ("HIGH", "criteria contains only vague comparative terms without bounds")
+
+    has_numeric = bool(_NUMERIC_RE.search(text))
+    has_conditional = bool(lower_words & _CONDITIONAL_WORDS)
+    has_categories = bool(_CATEGORY_RE.search(text))
+
+    if not has_numeric and not has_conditional and not has_categories:
+        return ("MEDIUM", "no numeric bounds, category lists, or conditional logic")
+
+    return None
+
+
+def _kwarg_str(node: ast.Call, name: str) -> str | None:
+    for kw in node.keywords:
+        if kw.arg == name:
+            return _extract_str(kw.value)
+    return None
+
+
+def check_weak_eq_criteria(source: str) -> list[SafetyWarning]:
+    """Check for weak criteria/principle strings in eq_principle calls (GL-S02)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    warnings: list[SafetyWarning] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _full_call_name(node)
+
+        if name in ("eq_principle_prompt_comparative", "gl.eq_principle.prompt_comparative"):
+            criteria_str = _kwarg_str(node, "principle")
+        elif name in (
+            "eq_principle_prompt_non_comparative",
+            "gl.eq_principle.prompt_non_comparative",
+        ):
+            criteria_str = _kwarg_str(node, "criteria")
+        else:
+            continue
+
+        if criteria_str is None:
+            continue
+
+        result = _score_criteria_weakness(criteria_str)
+        if result is None:
+            continue
+
+        level, reason = result
+        snippet = criteria_str[:60] + "..." if len(criteria_str) > 60 else criteria_str
+        severity_tag = "[HIGH RISK] " if level == "HIGH" else "[MEDIUM RISK] "
+        warnings.append(
+            SafetyWarning(
+                code="GL-S02",
+                msg=(
+                    f"{severity_tag}Weak eq_principle on line {node.lineno}: "
+                    f"criteria '{snippet}' does not define acceptance bounds "
+                    f"({reason}). Specify numeric ranges, categories, or explicit "
+                    f"YES/NO conditions."
+                ),
+                line=node.lineno,
+                col=node.col_offset,
+            )
+        )
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
+# GL-S03: eq_principle_strict_eq type mismatch
+# ---------------------------------------------------------------------------
+
+_GL_S03_MSG = (
+    "eq_principle_strict_eq on line {line} wraps a function with non-deterministic output "
+    "(LLM call or raw web fetch). Strict equality will fail across validators. "
+    "Use eq_principle_prompt_comparative or eq_principle_prompt_non_comparative."
+)
+
+
+def _contains_exec_prompt(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Call) and _is_exec_prompt(n)
+        for n in ast.walk(node)
+    )
+
+
+def _contains_get_webpage(node: ast.AST) -> bool:
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            call_name = _full_call_name(n)
+            if call_name in ("get_webpage", "gl.get_webpage") or call_name.endswith(".get_webpage"):
+                return True
+    return False
+
+
+def check_eq_strict_mismatch(source: str) -> list[SafetyWarning]:
+    """Check for non-deterministic functions wrapped in eq_principle_strict_eq (GL-S03)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    # Index all named function definitions for lookup by bare name
+    func_defs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func_defs[node.name] = node
+
+    warnings: list[SafetyWarning] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _full_call_name(node)
+        if name not in ("eq_principle_strict_eq", "gl.eq_principle.strict_eq"):
+            continue
+        if not node.args:
+            continue
+
+        fn_arg = node.args[0]
+        target: ast.AST | None = None
+
+        if isinstance(fn_arg, ast.Lambda):
+            target = fn_arg.body
+        elif isinstance(fn_arg, ast.Name) and fn_arg.id in func_defs:
+            target = func_defs[fn_arg.id]
+
+        if target is None:
+            continue
+
+        if _contains_exec_prompt(target) or _contains_get_webpage(target):
+            warnings.append(
+                SafetyWarning(
+                    code="GL-S03",
+                    msg=_GL_S03_MSG.format(line=node.lineno),
+                    line=node.lineno,
+                    col=node.col_offset,
+                )
+            )
+
+    return warnings

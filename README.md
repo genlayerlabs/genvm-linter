@@ -50,6 +50,79 @@ genvm-lint check contract.py --json
 - Forbidden imports (`random`, `os`, `time`, etc.)
 - Non-deterministic patterns (`float()`, `time.time()`)
 - Structure validation (dependency header)
+- Semantic prompt and consensus rules (GL-S01, GL-S02, GL-S03)
+
+### Semantic Rules (GL-S)
+
+These rules run as part of Layer 1 and catch common mistakes in GenLayer prompt and consensus patterns.
+
+#### GL-S01 — Vague prompt language (WARNING)
+
+Flags `exec_prompt` calls whose prompt string contains ambiguous terms (`fair`, `reasonable`,
+`appropriate`, `good`, `bad`, `assess`, `evaluate`, `determine if`, `decide if`, `judge whether`,
+etc.) without explicit acceptance criteria.
+
+Also flags when the result of `exec_prompt` is used directly in an `if` condition but
+`response_format` is absent or `"text"`.
+
+```python
+# Bad — ambiguous, no criteria
+result = gl.exec_prompt("Is this a fair assessment of the candidate?")
+
+# Good — explicit YES/NO condition
+result = gl.exec_prompt(
+    "Return YES if the score > 80, NO if the score <= 80",
+    response_format=bool,
+)
+```
+
+#### GL-S02 — Weak `eq_principle` criteria (WARNING / ERROR)
+
+Scores the `principle` kwarg of `eq_principle_prompt_comparative` and the `criteria` kwarg of
+`eq_principle_prompt_non_comparative` for vagueness:
+
+| Condition | Severity |
+|---|---|
+| Fewer than 10 words | HIGH RISK (error) |
+| Only vague comparative adjectives (`same`, `equivalent`, `match`, …) | HIGH RISK (error) |
+| No numeric bounds, no category list, no conditional logic | MEDIUM RISK (warning) |
+
+```python
+# Bad — single word, no bounds (HIGH)
+gl.eq_principle.prompt_comparative(fn, principle="same")
+
+# Bad — no criteria (MEDIUM)
+gl.eq_principle.prompt_comparative(
+    fn,
+    principle="The output should be reasonable and appropriate",
+)
+
+# Good — explicit bound
+gl.eq_principle.prompt_comparative(
+    fn,
+    principle="Return YES if prices differ by less than 5%, NO otherwise",
+)
+```
+
+#### GL-S03 — `eq_principle_strict_eq` type mismatch (ERROR)
+
+Flags `eq_principle_strict_eq` wrapping a lambda or function that calls `exec_prompt` or
+`get_webpage`. LLM outputs and raw web content are non-deterministic across validators, so strict
+equality consensus will always fail.
+
+```python
+# Bad — LLM output is non-deterministic
+gl.eq_principle.strict_eq(lambda: gl.exec_prompt("What is 2+2?"))
+
+# Bad — raw web content varies
+gl.eq_principle.strict_eq(lambda: gl.get_webpage("https://example.com"))
+
+# Good — switch to a comparative principle
+gl.eq_principle.prompt_comparative(
+    lambda: gl.exec_prompt("What is 2+2?", response_format=int),
+    principle="Return YES if both answers are numerically equal",
+)
+```
 
 ### Layer 2: SDK Validation (Accurate)
 - Downloads GenVM release artifacts (cached at `~/.cache/genvm-linter/`)

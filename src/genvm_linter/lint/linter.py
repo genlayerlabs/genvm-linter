@@ -87,7 +87,10 @@ def lint_contract(contract_path: Path | str) -> LintResult:
             "line": e.lineno or 1,
         })
 
-    has_errors = any(w.get("code", "").startswith("E") for w in all_warnings)
+    has_errors = any(
+        w.get("code", "").startswith("E") or w.get("code") == "GL-S03"
+        for w in all_warnings
+    )
 
     return LintResult(
         ok=not has_errors,
