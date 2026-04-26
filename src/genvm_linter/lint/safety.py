@@ -785,9 +785,12 @@ def _extract_str(node: ast.expr) -> str | None:
     return None
 
 
+_EXEC_PROMPT_NAMES = frozenset({"exec_prompt", "gl.exec_prompt", "genlayer.exec_prompt"})
+_GET_WEBPAGE_NAMES = frozenset({"get_webpage", "gl.get_webpage", "genlayer.get_webpage"})
+
+
 def _is_exec_prompt(node: ast.Call) -> bool:
-    name = _full_call_name(node)
-    return name == "exec_prompt" or name.endswith(".exec_prompt")
+    return _full_call_name(node) in _EXEC_PROMPT_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +802,13 @@ AMBIGUITY_MARKERS = [
     "acceptable", "deserves", "worthy", "suitable", "assess",
     "evaluate", "determine if", "decide if", "judge whether",
 ]
+
+# Word-boundary regex prevents false positives on substrings like
+# "goodbye" (good), "assessor" (assess), "badge" (bad).
+_AMBIGUITY_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(m) for m in AMBIGUITY_MARKERS) + r")\b",
+    re.IGNORECASE,
+)
 
 _CRITERIA_SIGNALS = frozenset({
     "if ", "when ", "≤", "≥", ">", "<",
@@ -825,27 +835,25 @@ def _check_response_format_in_func(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[SafetyWarning]:
     """Best-effort: flag exec_prompt with absent/text response_format used in conditions."""
-    # Collect assignments: var = exec_prompt(...)
+    # Collect assignments: var = exec_prompt(...) or var = await exec_prompt(...)
     prompt_assignments: dict[str, tuple[ast.Call, int, int]] = {}
     for node in ast.walk(func_node):
         if isinstance(node, ast.Assign):
-            if (
-                len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Call)
-                and _is_exec_prompt(node.value)
-            ):
-                var = node.targets[0].id
-                prompt_assignments[var] = (node.value, node.value.lineno, node.value.col_offset)
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                val = node.value
+                if isinstance(val, ast.Await):
+                    val = val.value
+                if isinstance(val, ast.Call) and _is_exec_prompt(val):
+                    var = node.targets[0].id
+                    prompt_assignments[var] = (val, val.lineno, val.col_offset)
         elif isinstance(node, ast.AnnAssign):
-            if (
-                isinstance(node.target, ast.Name)
-                and node.value
-                and isinstance(node.value, ast.Call)
-                and _is_exec_prompt(node.value)
-            ):
-                var = node.target.id
-                prompt_assignments[var] = (node.value, node.value.lineno, node.value.col_offset)
+            if isinstance(node.target, ast.Name) and node.value:
+                val = node.value
+                if isinstance(val, ast.Await):
+                    val = val.value
+                if isinstance(val, ast.Call) and _is_exec_prompt(val):
+                    var = node.target.id
+                    prompt_assignments[var] = (val, val.lineno, val.col_offset)
 
     if not prompt_assignments:
         return []
@@ -903,8 +911,7 @@ def check_vague_prompts(source: str) -> list[SafetyWarning]:
         prompt_str = _extract_str(node.args[0])
         if prompt_str is None:
             continue
-        lower = prompt_str.lower()
-        if any(m in lower for m in AMBIGUITY_MARKERS) and not _has_criteria_language(prompt_str):
+        if _AMBIGUITY_RE.search(prompt_str) and not _has_criteria_language(prompt_str):
             warnings.append(
                 SafetyWarning(
                     code="GL-S01",
@@ -937,7 +944,7 @@ _NUMERIC_RE = re.compile(r"\d+|[≤≥%]|\bpercent\b|\bgreater\b|\bless\b|\bat l
 _CONDITIONAL_WORDS = frozenset({
     "if", "when", "unless", "until", "condition", "yes", "no",
 })
-_CATEGORY_RE = re.compile(r"\b(one of|any of|among|either)\b|,", re.IGNORECASE)
+_CATEGORY_RE = re.compile(r"\b(one of|any of|among|either)\b|(?:[^,]+,){2}", re.IGNORECASE)
 
 _STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "be", "to", "of", "in", "it",
@@ -1047,10 +1054,8 @@ def _contains_exec_prompt(node: ast.AST) -> bool:
 
 def _contains_get_webpage(node: ast.AST) -> bool:
     for n in ast.walk(node):
-        if isinstance(n, ast.Call):
-            call_name = _full_call_name(n)
-            if call_name in ("get_webpage", "gl.get_webpage") or call_name.endswith(".get_webpage"):
-                return True
+        if isinstance(n, ast.Call) and _full_call_name(n) in _GET_WEBPAGE_NAMES:
+            return True
     return False
 
 
@@ -1061,9 +1066,10 @@ def check_eq_strict_mismatch(source: str) -> list[SafetyWarning]:
     except SyntaxError:
         return []
 
-    # Index all named function definitions for lookup by bare name
+    # Index module-level function definitions only — class methods with the same
+    # name must not collide with a module-level function passed to strict_eq.
     func_defs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             func_defs[node.name] = node
 

@@ -7,6 +7,9 @@ from typing import Any
 from .safety import check_safety
 from .structure import check_structure
 
+# Codes that are always errors regardless of "E" prefix convention.
+_ERROR_CODES = frozenset({"GL-S03"})
+
 
 @dataclass
 class LintResult:
@@ -88,7 +91,9 @@ def lint_contract(contract_path: Path | str) -> LintResult:
         })
 
     has_errors = any(
-        w.get("code", "").startswith("E") or w.get("code") == "GL-S03"
+        w.get("code", "").startswith("E")
+        or w.get("code") in _ERROR_CODES
+        or (w.get("code") == "GL-S02" and w.get("msg", "").startswith("[HIGH RISK]"))
         for w in all_warnings
     )
 

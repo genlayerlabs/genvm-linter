@@ -319,3 +319,145 @@ gl.eq_principle.strict_eq(lambda: gl.exec_prompt("test"))
         assert "eq_principle_strict_eq" in msg
         assert "eq_principle_prompt_comparative" in msg
         assert "eq_principle_prompt_non_comparative" in msg
+
+    # Bug #6: class method with same name as module-level fn must not collide
+    def test_class_method_not_confused_with_module_function(self):
+        src = """
+def fetch_answer():
+    return gl.exec_prompt("What is the answer?")
+
+class MyContract(gl.Contract):
+    def fetch_answer(self):
+        return "deterministic"
+
+gl.eq_principle.strict_eq(fetch_answer)
+"""
+        ws = check_eq_strict_mismatch(src)
+        # The module-level fetch_answer does call exec_prompt — should still flag.
+        assert any(w.code == "GL-S03" for w in ws)
+
+    def test_class_method_same_name_no_llm_module_fn_pure(self):
+        src = """
+def fetch_answer():
+    return sum(range(10))
+
+class MyContract(gl.Contract):
+    def fetch_answer(self):
+        return gl.exec_prompt("What is the answer?")
+
+gl.eq_principle.strict_eq(fetch_answer)
+"""
+        ws = check_eq_strict_mismatch(src)
+        # Module-level fetch_answer is pure; class method must not pollute the lookup.
+        assert not any(w.code == "GL-S03" for w in ws)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for review-identified bugs
+# ---------------------------------------------------------------------------
+
+
+class TestBugFixes:
+    # Bug #3: word-boundary regex prevents false positives on partial words
+    def test_no_false_positive_goodbye(self):
+        src = """
+result = gl.exec_prompt("Say goodbye to the user politely")
+"""
+        ws = check_vague_prompts(src)
+        assert not any(w.code == "GL-S01" for w in ws), (
+            "'goodbye' contains 'good' but must not trigger GL-S01"
+        )
+
+    def test_no_false_positive_assessor(self):
+        src = """
+result = gl.exec_prompt("Return the assessor score as a number")
+"""
+        ws = check_vague_prompts(src)
+        assert not any(w.code == "GL-S01" for w in ws), (
+            "'assessor' contains 'assess' but must not trigger GL-S01"
+        )
+
+    def test_no_false_positive_badge(self):
+        src = """
+result = gl.exec_prompt("Assign a badge to the winner")
+"""
+        ws = check_vague_prompts(src)
+        assert not any(w.code == "GL-S01" for w in ws), (
+            "'badge' contains 'bad' but must not trigger GL-S01"
+        )
+
+    def test_whole_word_good_still_flagged(self):
+        src = """
+result = gl.exec_prompt("Is this a good answer for the question?")
+"""
+        ws = check_vague_prompts(src)
+        assert any(w.code == "GL-S01" for w in ws), (
+            "bare 'good' must still trigger GL-S01"
+        )
+
+    # Bug #4: single comma in principle must not suppress MEDIUM-risk GL-S02
+    def test_single_comma_does_not_suppress_medium_risk(self):
+        # One comma only — the old regex matched any comma; the new one requires ≥2.
+        src = """
+gl.eq_principle.prompt_comparative(
+    fn,
+    principle="The output should be reasonable and well-structured, suitable for the given context",
+)
+"""
+        ws = check_weak_eq_criteria(src)
+        # ≥10 words, no numeric, no conditional, only 1 comma → not a category list → MEDIUM
+        assert any(w.code == "GL-S02" for w in ws)
+        assert any("MEDIUM" in w.msg for w in ws if w.code == "GL-S02")
+
+    # Bug #5: third-party .exec_prompt must not be treated as the SDK call
+    def test_third_party_exec_prompt_not_flagged_in_gl_s01(self):
+        src = """
+result = some_lib.llm.exec_prompt("Is this a fair assessment?")
+"""
+        ws = check_vague_prompts(src)
+        assert not any(w.code == "GL-S01" for w in ws), (
+            "third-party .exec_prompt must not be matched by GL-S01"
+        )
+
+    def test_third_party_exec_prompt_not_flagged_in_gl_s03(self):
+        src = """
+gl.eq_principle.strict_eq(lambda: some_lib.llm.exec_prompt("What is 2+2?"))
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "third-party .exec_prompt must not be matched by GL-S03"
+        )
+
+    def test_sdk_exec_prompt_still_flagged_in_gl_s03(self):
+        src = """
+gl.eq_principle.strict_eq(lambda: gl.exec_prompt("What is 2+2?"))
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert any(w.code == "GL-S03" for w in ws)
+
+    # Bug #8: async await pattern must be tracked for response_format check
+    def test_await_exec_prompt_tracked_for_response_format(self):
+        src = """
+async def check(self):
+    result = await gl.exec_prompt("Summarise this article")
+    if result:
+        return True
+    return False
+"""
+        ws = check_vague_prompts(src)
+        assert any(w.code == "GL-S01" and "response_format" in w.msg for w in ws), (
+            "await exec_prompt without structured response_format used in if must trigger GL-S01"
+        )
+
+    def test_await_exec_prompt_with_response_format_not_flagged(self):
+        src = """
+async def check(self):
+    result = await gl.exec_prompt("Is this correct?", response_format=bool)
+    if result:
+        return True
+    return False
+"""
+        ws = check_vague_prompts(src)
+        assert not any(
+            w.code == "GL-S01" and "response_format" in w.msg for w in ws
+        )
