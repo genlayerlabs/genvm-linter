@@ -93,7 +93,6 @@ def lint_contract(contract_path: Path | str) -> LintResult:
     has_errors = any(
         w.get("code", "").startswith("E")
         or w.get("code") in _ERROR_CODES
-        or (w.get("code") == "GL-S02" and w.get("msg", "").startswith("[HIGH RISK]"))
         for w in all_warnings
     )
 

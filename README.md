@@ -50,74 +50,71 @@ genvm-lint check contract.py --json
 - Forbidden imports (`random`, `os`, `time`, etc.)
 - Non-deterministic patterns (`float()`, `time.time()`)
 - Structure validation (dependency header)
-- Semantic prompt and consensus rules (GL-S01, GL-S02, GL-S03)
+- Semantic consensus rule (GL-S03)
 
 ### Semantic Rules (GL-S)
 
-These rules run as part of Layer 1 and catch common mistakes in GenLayer prompt and consensus patterns.
+These rules run as part of Layer 1 and catch common mistakes in GenLayer consensus patterns.
 
-#### GL-S01 — Vague prompt language (WARNING)
+#### GL-S03 — `eq_principle_strict_eq` nondeterminism mismatch (ERROR)
 
-Flags `exec_prompt` calls whose prompt string contains ambiguous terms (`fair`, `reasonable`,
-`appropriate`, `good`, `bad`, `assess`, `evaluate`, `determine if`, `decide if`, `judge whether`,
-etc.) without explicit acceptance criteria.
+Flags `eq_principle_strict_eq` (all API generations: `gl.eq_principle.strict_eq`,
+`eq_principle_strict_eq`, `eq_principle.strict_eq`) wrapping a lambda or function that
+**returns raw nondeterministic output directly**. LLM outputs and raw web content vary
+across validators, so strict-equality consensus will always fail.
 
-Also flags when the result of `exec_prompt` is used directly in an `if` condition but
-`response_format` is absent or `"text"`.
+**Detection is conservative** — only flagged when the wrapped function/lambda returns
+the nondeterministic value without any transformation. Processed output (boolean comparisons,
+`json.loads`, sorted results, etc.) is not flagged.
 
-```python
-# Bad — ambiguous, no criteria
-result = gl.exec_prompt("Is this a fair assessment of the candidate?")
+Nondeterministic calls detected (v0.1.0 and v0.1.3+ APIs):
+- `gl.exec_prompt`, `exec_prompt`, `gl.nondet.exec_prompt`
+- `gl.get_webpage`, `get_webpage`, `gl.nondet.web.render`
 
-# Good — explicit YES/NO condition
-result = gl.exec_prompt(
-    "Return YES if the score > 80, NO if the score <= 80",
-    response_format=bool,
-)
-```
-
-#### GL-S02 — Weak `eq_principle` criteria (WARNING / ERROR)
-
-Scores the `principle` kwarg of `eq_principle_prompt_comparative` and the `criteria` kwarg of
-`eq_principle_prompt_non_comparative` for vagueness:
-
-| Condition | Severity |
-|---|---|
-| Fewer than 10 words | HIGH RISK (error) |
-| Only vague comparative adjectives (`same`, `equivalent`, `match`, …) | HIGH RISK (error) |
-| No numeric bounds, no category list, no conditional logic | MEDIUM RISK (warning) |
+Flagged patterns:
 
 ```python
-# Bad — single word, no bounds (HIGH)
-gl.eq_principle.prompt_comparative(fn, principle="same")
-
-# Bad — no criteria (MEDIUM)
-gl.eq_principle.prompt_comparative(
-    fn,
-    principle="The output should be reasonable and appropriate",
-)
-
-# Good — explicit bound
-gl.eq_principle.prompt_comparative(
-    fn,
-    principle="Return YES if prices differ by less than 5%, NO otherwise",
-)
-```
-
-#### GL-S03 — `eq_principle_strict_eq` type mismatch (ERROR)
-
-Flags `eq_principle_strict_eq` wrapping a lambda or function that calls `exec_prompt` or
-`get_webpage`. LLM outputs and raw web content are non-deterministic across validators, so strict
-equality consensus will always fail.
-
-```python
-# Bad — LLM output is non-deterministic
+# Bad — LLM output is non-deterministic (v0.1.0 API)
 gl.eq_principle.strict_eq(lambda: gl.exec_prompt("What is 2+2?"))
 
-# Bad — raw web content varies
+# Bad — raw web content varies (v0.1.0 API)
 gl.eq_principle.strict_eq(lambda: gl.get_webpage("https://example.com"))
 
-# Good — switch to a comparative principle
+# Bad — v0.1.3+ API
+gl.eq_principle.strict_eq(lambda: gl.nondet.exec_prompt("What is 2+2?"))
+gl.eq_principle.strict_eq(lambda: gl.nondet.web.render("https://example.com"))
+
+# Bad — named function returning raw nondet
+def fetch():
+    return gl.exec_prompt("What is 2+2?")
+
+gl.eq_principle.strict_eq(fetch)
+
+# Bad — simple passthrough variable
+def fetch():
+    result = gl.exec_prompt("What is 2+2?")
+    return result
+
+gl.eq_principle.strict_eq(fetch)
+```
+
+Not flagged (processed output):
+
+```python
+# OK — bool is deterministic
+gl.eq_principle.strict_eq(lambda: "Paris" in gl.get_webpage("https://example.com"))
+
+# OK — comparison produces deterministic bool
+def classify():
+    data = gl.exec_prompt("Answer YES or NO")
+    return data == "YES"
+
+gl.eq_principle.strict_eq(classify)
+```
+
+Fix — switch to a comparative principle:
+
+```python
 gl.eq_principle.prompt_comparative(
     lambda: gl.exec_prompt("What is 2+2?", response_format=int),
     principle="Return YES if both answers are numerically equal",

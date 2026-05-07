@@ -101,7 +101,6 @@ class GenVMLinter:
             severity = Severity.ERROR if (
                 w.code.startswith("E")
                 or w.code == "GL-S03"
-                or (w.code == "GL-S02" and w.msg.startswith("[HIGH RISK]"))
             ) else Severity.WARNING
             results.append(
                 ValidationResult(
@@ -160,15 +159,6 @@ def _get_suggestion(code: str) -> Optional[str]:
         "E024": "Move contract call outside the leader/validator function. Inter-contract calls cannot happen inside non-deterministic contexts.",
         "E025": "Cannot nest run_nondet/eq_principle inside a non-deterministic block.",
         "E026": "Move storage write outside the leader/validator function. Storage writes cannot happen inside non-deterministic contexts.",
-        "GL-S01": (
-            "Replace vague adjectives with explicit criteria "
-            "(e.g., 'return YES if score > 80, NO otherwise'). "
-            "Add response_format=bool or a Pydantic model when the result feeds conditionals."
-        ),
-        "GL-S02": (
-            "Add numeric bounds, category lists, or YES/NO conditions "
-            "to your eq_principle criteria string."
-        ),
         "GL-S03": (
             "Replace eq_principle_strict_eq with eq_principle_prompt_comparative "
             "or eq_principle_prompt_non_comparative for LLM/web outputs."
