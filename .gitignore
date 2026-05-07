@@ -62,3 +62,6 @@ env/
 test_*.py
 !tests/**/test_*.py
 vscode-extension/
+
+*.pyc
+.claude/settings.local.json
