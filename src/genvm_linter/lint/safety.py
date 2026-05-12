@@ -865,6 +865,9 @@ def _collect_var_assigns(
                 if stmt.value and isinstance(stmt.target, ast.Name):
                     hit = _s03_nondet_call(stmt.value)
                     record(stmt.target.id, hit if hit else (None, stmt.lineno))
+            elif isinstance(stmt, ast.AugAssign):
+                if isinstance(stmt.target, ast.Name):
+                    record(stmt.target.id, (None, stmt.lineno))
             for body in _get_compound_bodies(stmt):
                 scan(body)
 

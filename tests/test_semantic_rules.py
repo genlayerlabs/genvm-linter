@@ -381,6 +381,21 @@ gl.eq_principle.strict_eq(outer)
             "nondet only inside a nested function — outer returns constant, must not flag"
         )
 
+    def test_passes_augmented_assignment_breaks_nondet_chain(self):
+        src = """
+def fn():
+    result = gl.exec_prompt("summarise this")
+    result += " post-processed"
+    return result
+
+gl.eq_principle_strict_eq(fn)
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "AugAssign after nondet call should break the chain "
+            "and not flag as raw nondet output"
+        )
+
     def test_message_contains_call_name_and_line(self):
         src = """
 gl.eq_principle.strict_eq(lambda: gl.exec_prompt("test"))
