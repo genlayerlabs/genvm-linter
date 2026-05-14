@@ -396,6 +396,114 @@ gl.eq_principle_strict_eq(fn)
             "and not flag as raw nondet output"
         )
 
+    # ------------------------------------------------------------------
+    # CHANGE 1: decorator form
+    # ------------------------------------------------------------------
+
+    def test_flags_decorator_form_gl_eq_principle_strict_eq(self):
+        src = """
+@gl.eq_principle.strict_eq
+def fn():
+    return gl.exec_prompt("What is the answer?")
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert any(w.code == "GL-S03" for w in ws), (
+            "@gl.eq_principle.strict_eq decorator on fn returning raw exec_prompt must flag GL-S03"
+        )
+
+    def test_flags_decorator_form_bare_strict_eq(self):
+        src = """
+@eq_principle_strict_eq
+def fn():
+    return gl.exec_prompt("What is the answer?")
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert any(w.code == "GL-S03" for w in ws), (
+            "@eq_principle_strict_eq decorator on fn returning raw exec_prompt must flag GL-S03"
+        )
+
+    def test_passes_decorator_form_bool_return(self):
+        src = """
+@gl.eq_principle.strict_eq
+def fn():
+    return "keyword" in gl.get_webpage("https://example.com")
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "@gl.eq_principle.strict_eq on fn returning bool from get_webpage must not flag"
+        )
+
+    # ------------------------------------------------------------------
+    # CHANGE 2: self.method resolution
+    # ------------------------------------------------------------------
+
+    def test_flags_self_method_raw_nondet(self):
+        src = """
+class MyContract(gl.Contract):
+    def run(self):
+        gl.eq_principle_strict_eq(self.fetch)
+
+    def fetch(self):
+        return gl.exec_prompt("answer this")
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert any(w.code == "GL-S03" for w in ws), (
+            "self.fetch returning raw exec_prompt passed to strict_eq must flag GL-S03"
+        )
+
+    def test_passes_self_method_bool_return(self):
+        src = """
+class MyContract(gl.Contract):
+    def run(self):
+        gl.eq_principle_strict_eq(self.fetch)
+
+    def fetch(self):
+        return "keyword" in gl.get_webpage("https://example.com")
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "self.fetch returning bool derived from nondet must not flag"
+        )
+
+    def test_passes_self_method_not_found_in_class(self):
+        src = """
+class MyContract(gl.Contract):
+    def run(self):
+        gl.eq_principle_strict_eq(self.external)
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "self.external not defined in class body — conservative, must not flag"
+        )
+
+    # ------------------------------------------------------------------
+    # CHANGE 3 / CHANGE 4: alias and nondet source list coverage
+    # ------------------------------------------------------------------
+
+    def test_passes_third_party_exec_prompt_not_flagged_alias(self):
+        src = """
+def fn():
+    return my_llm.exec_prompt("What is the answer?")
+
+gl.eq_principle.strict_eq(fn)
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert not any(w.code == "GL-S03" for w in ws), (
+            "my_llm.exec_prompt is a third-party call — must not match GL-S03 nondet list"
+        )
+
+    def test_flags_get_webpage_v010_raw_return(self):
+        src = """
+def fn():
+    return gl.get_webpage("https://example.com")
+
+gl.eq_principle_strict_eq(fn)
+"""
+        ws = check_eq_strict_mismatch(src)
+        assert any(w.code == "GL-S03" for w in ws), (
+            "gl.get_webpage (v0.1.0 API) raw return must flag GL-S03"
+        )
+
     def test_message_contains_call_name_and_line(self):
         src = """
 gl.eq_principle.strict_eq(lambda: gl.exec_prompt("test"))

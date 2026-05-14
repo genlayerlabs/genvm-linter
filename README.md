@@ -112,6 +112,8 @@ def classify():
 gl.eq_principle.strict_eq(classify)
 ```
 
+**Alias handling:** GL-S03 matches conventional SDK names only (`gl.exec_prompt`, `gl.get_webpage`, `gl.nondet.exec_prompt`, `gl.nondet.web.render`, and their `genlayer.*` equivalents). Functions named `exec_prompt` or `get_webpage` not accessed through the `gl` or `genlayer` namespace are not flagged.
+
 Fix — switch to a comparative principle:
 
 ```python

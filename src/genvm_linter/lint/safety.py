@@ -769,23 +769,40 @@ def _full_call_name(node: ast.Call) -> str:
 # GL-S03: eq_principle_strict_eq nondeterminism mismatch
 # ---------------------------------------------------------------------------
 
-# SDK nondeterministic calls — both v0.1.0 and v0.1.3+ APIs
+# GL-S03 detects the following SDK call names by convention.
+# Import-aware alias tracking is out of scope for this rule.
+# Local or third-party functions named exec_prompt or get_webpage
+# that are NOT accessed through the gl/genlayer namespace will
+# not be flagged (they don't match the supported name list).
+# Supported strict_eq names: gl.eq_principle_strict_eq (v0.1.0),
+# gl.eq_principle.strict_eq (v0.1.3+), eq_principle_strict_eq
+# (direct import alias).
+
+# SDK nondeterministic calls — explicit names only (v0.1.0 and v0.1.3+ APIs).
+# No prefix or wildcard matching; only the exact names listed here are in scope.
 _S03_NONDET_CALLS = frozenset({
-    "exec_prompt",
-    "gl.exec_prompt",
-    "genlayer.exec_prompt",
-    "gl.nondet.exec_prompt",        # v0.1.3+
+    # v0.1.0 — get_webpage is the direct predecessor of nondet.web.render;
+    # both capture rendered page output, not stable API responses
     "get_webpage",
     "gl.get_webpage",
     "genlayer.get_webpage",
-    "gl.nondet.web.render",         # v0.1.3+
+    # exec_prompt — LLM call, always nondeterministic
+    "exec_prompt",
+    "gl.exec_prompt",
+    "genlayer.exec_prompt",
+    # v0.1.3+ equivalents
+    "gl.nondet.exec_prompt",
+    "gl.nondet.web.render",
+    "genlayer.gl.nondet.exec_prompt",
+    "genlayer.gl.nondet.web.render",
 })
 
 # strict_eq patterns — v0.1.0, v0.1.3+, and aliased import forms
 _STRICT_EQ_CALLS = frozenset({
-    "eq_principle_strict_eq",       # from genlayer.std.eq_principles import eq_principle_strict_eq
-    "gl.eq_principle.strict_eq",    # v0.1.3+
-    "eq_principle.strict_eq",       # from genlayer.gl import eq_principle
+    "eq_principle_strict_eq",           # direct import alias
+    "gl.eq_principle_strict_eq",        # v0.1.0 — gl module attribute form
+    "gl.eq_principle.strict_eq",        # v0.1.3+
+    "eq_principle.strict_eq",           # from genlayer.gl import eq_principle
 })
 
 _GL_S03_MSG = (
@@ -804,6 +821,22 @@ def _s03_nondet_call(node: ast.expr) -> tuple[str, int] | None:
         if name in _S03_NONDET_CALLS:
             return name, inner.lineno
     return None
+
+
+def _decorator_name(dec: ast.expr) -> str:
+    """Return the full dotted name of a decorator (Name or Attribute only), else ''."""
+    if isinstance(dec, ast.Name):
+        return dec.id
+    if isinstance(dec, ast.Attribute):
+        parts: list[str] = []
+        current: ast.expr = dec
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+            return ".".join(reversed(parts))
+    return ""
 
 
 def _get_compound_bodies(stmt: ast.stmt) -> list[list[ast.stmt]]:
@@ -957,39 +990,83 @@ def check_eq_strict_mismatch(source: str) -> list[SafetyWarning]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             func_defs[node.name] = node
 
+    # Index top-level class methods for self.method resolution
+    class_methods: dict[str, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods[item.name] = item
+            class_methods[node.name] = methods
+
     warnings: list[SafetyWarning] = []
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if _full_call_name(node) not in _STRICT_EQ_CALLS:
-            continue
-        if not node.args:
-            continue
-
-        fn_arg = node.args[0]
-        result: tuple[str, int] | None = None
-
-        if isinstance(fn_arg, ast.Lambda):
-            result = _raw_nondet_in_lambda(fn_arg)
-        elif isinstance(fn_arg, ast.Name) and fn_arg.id in func_defs:
-            result = _raw_nondet_in_func(func_defs[fn_arg.id], func_defs)
-
-        if result is None:
-            continue
-
+    def _emit(line: int, col: int, result: tuple[str, int]) -> None:
         call_name, nondet_line = result
-        warnings.append(
-            SafetyWarning(
-                code="GL-S03",
-                msg=_GL_S03_MSG.format(
-                    line=node.lineno,
-                    call_name=call_name,
-                    nondet_line=nondet_line,
-                ),
-                line=node.lineno,
-                col=node.col_offset,
-            )
-        )
+        warnings.append(SafetyWarning(
+            code="GL-S03",
+            msg=_GL_S03_MSG.format(
+                line=line,
+                call_name=call_name,
+                nondet_line=nondet_line,
+            ),
+            line=line,
+            col=col,
+        ))
 
+    def _resolve_arg(
+        fn_arg: ast.expr,
+        current_class: str | None,
+    ) -> tuple[str, int] | None:
+        if isinstance(fn_arg, ast.Lambda):
+            return _raw_nondet_in_lambda(fn_arg)
+        if isinstance(fn_arg, ast.Name) and fn_arg.id in func_defs:
+            return _raw_nondet_in_func(func_defs[fn_arg.id], func_defs)
+        if (
+            isinstance(fn_arg, ast.Attribute)
+            and isinstance(fn_arg.value, ast.Name)
+            and fn_arg.value.id == "self"
+            and current_class is not None
+        ):
+            method_node = class_methods.get(current_class, {}).get(fn_arg.attr)
+            if method_node is not None:
+                return _raw_nondet_in_func(method_node, func_defs)
+        return None
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.current_class: str | None = None
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            old = self.current_class
+            self.current_class = node.name
+            self.generic_visit(node)
+            self.current_class = old
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._check_decorators(node)
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._check_decorators(node)
+            self.generic_visit(node)
+
+        def _check_decorators(
+            self, node: ast.FunctionDef | ast.AsyncFunctionDef
+        ) -> None:
+            for dec in node.decorator_list:
+                if _decorator_name(dec) in _STRICT_EQ_CALLS:
+                    result = _raw_nondet_in_func(node, func_defs)
+                    if result is not None:
+                        _emit(dec.lineno, dec.col_offset, result)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if _full_call_name(node) in _STRICT_EQ_CALLS and node.args:
+                result = _resolve_arg(node.args[0], self.current_class)
+                if result is not None:
+                    _emit(node.lineno, node.col_offset, result)
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
     return warnings
