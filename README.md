@@ -67,22 +67,29 @@ across validators, so strict-equality consensus will always fail.
 the nondeterministic value without any transformation. Processed output (boolean comparisons,
 `json.loads`, sorted results, etc.) is not flagged.
 
-Nondeterministic calls detected (v0.1.0 and v0.1.3+ APIs):
-- `gl.exec_prompt`, `exec_prompt`, `gl.nondet.exec_prompt`
-- `gl.get_webpage`, `get_webpage`, `gl.nondet.web.render`
+Nondeterministic calls detected in two forms:
+
+- **Namespace-qualified** (v0.1.0 and v0.1.3+ APIs): `gl.exec_prompt`, `gl.get_webpage`,
+  `gl.nondet.exec_prompt`, `gl.nondet.web.render`, and their `genlayer.*` equivalents
+- **Bare names** (direct SDK import convention): `exec_prompt`, `get_webpage` — matched
+  when called without a namespace prefix, representing
+  `from genlayer.std.nondet_fns import exec_prompt` style imports
 
 Flagged patterns:
 
 ```python
-# Bad — LLM output is non-deterministic (v0.1.0 API)
+# Bad — namespace-qualified, LLM output is non-deterministic (v0.1.0 API)
 gl.eq_principle.strict_eq(lambda: gl.exec_prompt("What is 2+2?"))
 
-# Bad — raw web content varies (v0.1.0 API)
+# Bad — namespace-qualified, raw web content varies (v0.1.0 API)
 gl.eq_principle.strict_eq(lambda: gl.get_webpage("https://example.com"))
 
-# Bad — v0.1.3+ API
+# Bad — namespace-qualified, v0.1.3+ API
 gl.eq_principle.strict_eq(lambda: gl.nondet.exec_prompt("What is 2+2?"))
 gl.eq_principle.strict_eq(lambda: gl.nondet.web.render("https://example.com"))
+
+# Bad — bare name (direct import: from genlayer.std.nondet_fns import exec_prompt)
+gl.eq_principle.strict_eq(lambda: exec_prompt("What is 2+2?"))
 
 # Bad — named function returning raw nondet
 def fetch():
@@ -98,7 +105,7 @@ def fetch():
 gl.eq_principle.strict_eq(fetch)
 ```
 
-Not flagged (processed output):
+Not flagged (processed output or third-party calls):
 
 ```python
 # OK — bool is deterministic
@@ -110,9 +117,16 @@ def classify():
     return data == "YES"
 
 gl.eq_principle.strict_eq(classify)
+
+# OK — third-party: my_service.exec_prompt is not a GL SDK call
+gl.eq_principle.strict_eq(lambda: my_service.exec_prompt("What is 2+2?"))
 ```
 
-**Alias handling:** GL-S03 matches conventional SDK names only (`gl.exec_prompt`, `gl.get_webpage`, `gl.nondet.exec_prompt`, `gl.nondet.web.render`, and their `genlayer.*` equivalents). Functions named `exec_prompt` or `get_webpage` not accessed through the `gl` or `genlayer` namespace are not flagged.
+**Alias handling:** GL-S03 matches by name convention, not by import tracking. Bare
+names `exec_prompt` and `get_webpage` are flagged when called without a namespace prefix
+(representing direct SDK imports such as `from genlayer.std.nondet_fns import exec_prompt`).
+Calls through a non-SDK object — e.g. `my_service.exec_prompt()` — are **not** flagged
+because `my_service.exec_prompt` is not in the matched name list.
 
 Fix — switch to a comparative principle:
 
