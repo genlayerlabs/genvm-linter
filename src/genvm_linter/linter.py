@@ -98,7 +98,10 @@ class GenVMLinter:
         # Safety checks (forbidden imports, non-determinism)
         safety_warnings = check_safety(source_code)
         for w in safety_warnings:
-            severity = Severity.ERROR if w.code.startswith("E") else Severity.WARNING
+            severity = Severity.ERROR if (
+                w.code.startswith("E")
+                or w.code == "GL-S03"
+            ) else Severity.WARNING
             results.append(
                 ValidationResult(
                     rule_id=w.code,
@@ -114,7 +117,9 @@ class GenVMLinter:
         # Structure checks (contract class, decorators)
         structure_warnings = check_structure(source_code)
         for w in structure_warnings:
-            severity = Severity.ERROR if w.code.startswith("E") else Severity.WARNING
+            severity = Severity.ERROR if (
+                w.code.startswith("E") or w.code == "GL-S03"
+            ) else Severity.WARNING
             results.append(
                 ValidationResult(
                     rule_id=w.code,
@@ -154,6 +159,10 @@ def _get_suggestion(code: str) -> Optional[str]:
         "E024": "Move contract call outside the leader/validator function. Inter-contract calls cannot happen inside non-deterministic contexts.",
         "E025": "Cannot nest run_nondet/eq_principle inside a non-deterministic block.",
         "E026": "Move storage write outside the leader/validator function. Storage writes cannot happen inside non-deterministic contexts.",
+        "GL-S03": (
+            "Replace eq_principle_strict_eq with eq_principle_prompt_comparative "
+            "or eq_principle_prompt_non_comparative for LLM/web outputs."
+        ),
     }
     return suggestions.get(code)
 

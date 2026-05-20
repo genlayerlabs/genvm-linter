@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .lint import lint_contract
+from .lint import lint_contract, _ERROR_CODES
 from .output import (
     format_human_lint,
     format_human_schema,
@@ -86,7 +86,7 @@ def _run_legacy_lint():
 
     # Filter by severity if specified
     if args.severity == "error":
-        result.warnings = [w for w in result.warnings if w.get("code", "").startswith("E")]
+        result.warnings = [w for w in result.warnings if w.get("code", "").startswith("E") or w.get("code") in _ERROR_CODES]
 
     # Filter excluded rules
     if args.exclude_rules:

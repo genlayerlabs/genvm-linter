@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from .lint import LintResult
+from .lint import LintResult, _ERROR_CODES
 from .validate import ValidationResult
 
 
@@ -124,7 +124,7 @@ def format_vscode_json(lint_result: LintResult, validate_result: ValidationResul
     # Convert lint warnings
     for w in lint_result.warnings:
         code = w.get("code", "W000")
-        severity = "error" if code.startswith("E") else "warning"
+        severity = "error" if code.startswith("E") or code in _ERROR_CODES else "warning"
 
         if severity == "error":
             error_count += 1
