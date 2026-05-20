@@ -554,6 +554,36 @@ gl.eq_principle.strict_eq(lambda: gl.nondet.exec_prompt("x"))
         assert "GL-S03" in codes, "GL-S03 must fire for raw nondet in strict_eq"
         assert "E010" not in codes, "E010 must not double-flag when nondet is in strict_eq lambda"
 
+    def test_decorator_strict_eq_no_e010_v013(self):
+        src = """
+@gl.eq_principle.strict_eq
+def fn():
+    return gl.nondet.exec_prompt("x")
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for decorator form with raw nondet"
+        assert "E010" not in codes, "E010 must not fire — decorated function is a safe entry point"
+
+    def test_decorator_strict_eq_no_e010_bare(self):
+        src = """
+@eq_principle_strict_eq
+def fn():
+    return gl.exec_prompt("x")
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for bare decorator form with raw nondet"
+        assert "E010" not in codes, "E010 must not fire — decorated function is a safe entry point"
+
+    def test_decorator_strict_eq_no_e010_v010(self):
+        src = """
+@gl.eq_principle_strict_eq
+def fn():
+    return gl.get_webpage("https://example.com")
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for v0.1.0 decorator form with raw nondet"
+        assert "E010" not in codes, "E010 must not fire — decorated function is a safe entry point"
+
 
 # ---------------------------------------------------------------------------
 # format_vscode_json GL-S03 severity test

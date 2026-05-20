@@ -351,6 +351,15 @@ class NondetCallFinder(ast.NodeVisitor):
 class SafeEntryPointFinder(ast.NodeVisitor):
     """Find functions passed to eq_principle/run_nondet (safe contexts for nondet)."""
 
+    # Decorator names that mark a function as a safe entry point.
+    # Must stay in sync with _STRICT_EQ_CALLS in GL-S03.
+    _STRICT_EQ_DECORATORS = frozenset({
+        "eq_principle_strict_eq",
+        "gl.eq_principle_strict_eq",
+        "gl.eq_principle.strict_eq",
+        "eq_principle.strict_eq",
+    })
+
     # Patterns that mark safe entry points.
     # strict_eq entries must stay in sync with _STRICT_EQ_CALLS in GL-S03.
     SAFE_PATTERNS = {
@@ -391,12 +400,16 @@ class SafeEntryPointFinder(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef):
         func_name = self._get_qualified_name(node.name)
         self.function_stack.append(func_name)
+        if any(_decorator_name(dec) in self._STRICT_EQ_DECORATORS for dec in node.decorator_list):
+            self.safe_functions.add(func_name)
         self.generic_visit(node)
         self.function_stack.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
         func_name = self._get_qualified_name(node.name)
         self.function_stack.append(func_name)
+        if any(_decorator_name(dec) in self._STRICT_EQ_DECORATORS for dec in node.decorator_list):
+            self.safe_functions.add(func_name)
         self.generic_visit(node)
         self.function_stack.pop()
 
