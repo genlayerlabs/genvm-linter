@@ -1,6 +1,8 @@
 """Tests for the GL-S03 semantic lint rule."""
 
-from genvm_linter.lint.safety import check_eq_strict_mismatch
+import json
+
+from genvm_linter.lint.safety import check_eq_strict_mismatch, check_safety
 
 
 # ---------------------------------------------------------------------------
@@ -514,3 +516,62 @@ gl.eq_principle.strict_eq(lambda: gl.exec_prompt("test"))
         assert "gl.exec_prompt" in msg
         assert "eq_principle_prompt_comparative" in msg
         assert "eq_principle_prompt_non_comparative" in msg
+
+
+# ---------------------------------------------------------------------------
+# E010 / GL-S03 double-flag regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestE010NoDoubleFlag:
+    """eq_principle_strict_eq (any alias form) + gl.nondet.* lambda must emit
+    GL-S03 only.  E010 must NOT fire — the lambda is in a safe context."""
+
+    def _codes(self, src: str) -> set[str]:
+        return {w.code for w in check_safety(src)}
+
+    def test_bare_eq_principle_strict_eq_gl_nondet_no_e010(self):
+        src = """
+eq_principle_strict_eq(lambda: gl.nondet.exec_prompt("x"))
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for raw nondet in strict_eq"
+        assert "E010" not in codes, "E010 must not double-flag when nondet is in strict_eq lambda"
+
+    def test_gl_eq_principle_strict_eq_v010_gl_nondet_no_e010(self):
+        src = """
+gl.eq_principle_strict_eq(lambda: gl.nondet.exec_prompt("x"))
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for raw nondet in strict_eq"
+        assert "E010" not in codes, "E010 must not double-flag when nondet is in strict_eq lambda"
+
+    def test_gl_eq_principle_strict_eq_v013_gl_nondet_no_e010(self):
+        src = """
+gl.eq_principle.strict_eq(lambda: gl.nondet.exec_prompt("x"))
+"""
+        codes = self._codes(src)
+        assert "GL-S03" in codes, "GL-S03 must fire for raw nondet in strict_eq"
+        assert "E010" not in codes, "E010 must not double-flag when nondet is in strict_eq lambda"
+
+
+# ---------------------------------------------------------------------------
+# format_vscode_json GL-S03 severity test
+# ---------------------------------------------------------------------------
+
+
+class TestFormatVscodeJsonGLS03:
+    def test_gl_s03_serialized_as_error_not_warning(self):
+        from genvm_linter.lint import LintResult
+        from genvm_linter.output import format_vscode_json
+
+        result = LintResult(
+            ok=False,
+            warnings=[{"code": "GL-S03", "msg": "test message", "line": 1, "col": 0}],
+        )
+        output = json.loads(format_vscode_json(result))
+        assert output["results"][0]["severity"] == "error", (
+            "GL-S03 must be serialized as 'error' by format_vscode_json"
+        )
+        assert output["summary"]["by_severity"]["error"] == 1
+        assert output["summary"]["by_severity"]["warning"] == 0

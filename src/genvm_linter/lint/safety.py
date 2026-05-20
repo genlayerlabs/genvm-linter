@@ -318,6 +318,12 @@ class NondetCallFinder(ast.NodeVisitor):
         self.generic_visit(node)
         self.function_stack.pop()
 
+    def visit_Lambda(self, node: ast.Lambda):
+        lambda_scope = f"<lambda:{node.lineno}:{node.col_offset}>"
+        self.function_stack.append(lambda_scope)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
     def visit_Call(self, node: ast.Call):
         # Check if this is a gl.nondet.* call
         call_name = self._get_full_call_name(node)
@@ -345,11 +351,15 @@ class NondetCallFinder(ast.NodeVisitor):
 class SafeEntryPointFinder(ast.NodeVisitor):
     """Find functions passed to eq_principle/run_nondet (safe contexts for nondet)."""
 
-    # Patterns that mark safe entry points
+    # Patterns that mark safe entry points.
+    # strict_eq entries must stay in sync with _STRICT_EQ_CALLS in GL-S03.
     SAFE_PATTERNS = {
         "gl.vm.run_nondet": [0, 1],  # Both leader_fn and validator_fn args
         "gl.vm.run_nondet_unsafe": [0, 1],
-        "gl.eq_principle.strict_eq": [0],  # First arg
+        "gl.eq_principle.strict_eq": [0],        # v0.1.3+ — first arg
+        "gl.eq_principle_strict_eq": [0],        # v0.1.0 gl attribute form
+        "eq_principle_strict_eq": [0],           # direct import alias
+        "eq_principle.strict_eq": [0],           # from genlayer.gl import eq_principle
         "gl.eq_principle.prompt_comparative": [0],
         "gl.eq_principle.prompt_non_comparative": [0],
     }
@@ -441,7 +451,9 @@ class SafeEntryPointFinder(ast.NodeVisitor):
                     self.safe_functions.add(".".join(reversed(parts)))
         elif isinstance(arg, ast.Lambda):
             # Lambda passed directly: eq_principle.strict_eq(lambda: ...)
-            # The containing function scope is safe for this lambda's calls
+            # Register the lambda's own synthetic scope so NondetCallFinder
+            # can match it regardless of whether there's a containing function.
+            self.safe_functions.add(f"<lambda:{arg.lineno}:{arg.col_offset}>")
             scope = self._get_current_scope()
             if scope:
                 self.lambda_scopes.add(scope)
