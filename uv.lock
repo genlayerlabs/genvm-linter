@@ -41,7 +41,7 @@ wheels = [
 
 [[package]]
 name = "genvm-linter"
-version = "0.7.1"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
