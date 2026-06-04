@@ -2,17 +2,21 @@ name: Publish to PyPI
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -25,6 +29,31 @@ jobs:
         VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+    - name: Validate release tag
+      run: |
+        set -euo pipefail
+
+        EXPECTED_TAG="v${{ steps.version.outputs.version }}"
+        if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+          echo "Publishing must run from a release tag, not ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}."
+          exit 1
+        fi
+
+        if [ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]; then
+          echo "Release tag ${GITHUB_REF_NAME} does not match pyproject.toml version ${{ steps.version.outputs.version }}."
+          echo "Expected tag: ${EXPECTED_TAG}"
+          exit 1
+        fi
+
+        RELEASE_BRANCH="v${{ steps.version.outputs.version }}"
+        RELEASE_BRANCH="${RELEASE_BRANCH%.*}"
+        git fetch origin "refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+        TAG_COMMIT="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+        if ! git merge-base --is-ancestor "${TAG_COMMIT}" "origin/${RELEASE_BRANCH}"; then
+          echo "Release tag ${GITHUB_REF_NAME} must point to a commit contained in ${RELEASE_BRANCH}."
+          exit 1
+        fi
+
     - name: Check if version exists on PyPI
       id: check
       run: |
@@ -35,9 +64,12 @@ jobs:
           echo "exists=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: Skip if version exists
+    - name: Fail if version exists
       if: steps.check.outputs.exists == 'true'
-      run: echo "Version ${{ steps.version.outputs.version }} already published, skipping"
+      run: |
+        echo "Version ${{ steps.version.outputs.version }} is already published on PyPI."
+        echo "PyPI releases are immutable; bump pyproject.toml and create a new matching tag."
+        exit 1
 
     - name: Install dependencies
       if: steps.check.outputs.exists == 'false'
