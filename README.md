@@ -2,6 +2,11 @@
 
 Fast validation and schema extraction for GenLayer intelligent contracts.
 
+## Branching
+
+See [docs/BRANCHING.md](docs/BRANCHING.md) for the release-train model used by
+this repo.
+
 ## Installation
 
 ```bash
