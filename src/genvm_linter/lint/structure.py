@@ -50,12 +50,12 @@ class ContractStructureChecker(ast.NodeVisitor):
         self.is_contract_class = old_is_contract
 
     def _is_contract_subclass(self, node: ast.ClassDef) -> bool:
-        """Check if class inherits from gl.Contract or Contract."""
+        """Check if class inherits from gl.Contract, genlayer.Contract, or Contract."""
         for base in node.bases:
             if isinstance(base, ast.Attribute):
-                # gl.Contract
+                # gl.Contract or genlayer.Contract
                 if (isinstance(base.value, ast.Name) and
-                    base.value.id == "gl" and
+                    base.value.id in ("gl", "genlayer") and
                     base.attr == "Contract"):
                     return True
             elif isinstance(base, ast.Name):
@@ -299,7 +299,7 @@ class StorageClassChecker(ast.NodeVisitor):
         for base in node.bases:
             if isinstance(base, ast.Attribute):
                 if (isinstance(base.value, ast.Name) and
-                    base.value.id == "gl" and
+                    base.value.id in ("gl", "genlayer") and
                     base.attr == "Contract"):
                     return True
             elif isinstance(base, ast.Name):
