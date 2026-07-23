@@ -9,6 +9,7 @@ from typing import Any, Callable
 from unittest.mock import MagicMock
 
 from .artifacts import (
+    GITHUB_RELEASES_URL,
     download_artifacts,
     extract_runner,
     find_latest_runner,
@@ -81,7 +82,7 @@ def extract_sdk_paths(
         if latest_hash and latest_hash != genlayer_hash:
             notes.append(
                 f"py-genlayer: a newer runner is available ({latest_hash}). "
-                f"See https://github.com/genlayerlabs/genvm/releases for changes."
+                f"See {GITHUB_RELEASES_URL} for changes."
             )
     else:
         genlayer_hash = find_latest_runner(tarball_path, "py-genlayer")
@@ -119,7 +120,7 @@ def extract_sdk_paths(
             if latest_emb and latest_emb != emb_hash:
                 notes.append(
                     f"py-lib-genlayer-embeddings: a newer runner is available ({latest_emb}). "
-                    f"See https://github.com/genlayerlabs/genvm/releases for changes."
+                    f"See {GITHUB_RELEASES_URL} for changes."
                 )
         emb_path = extract_runner(tarball_path, "py-lib-genlayer-embeddings", emb_hash)
         paths.append(emb_path)
@@ -153,6 +154,17 @@ def get_sdk_paths_from_genvmroot() -> list[Path] | None:
         return [alt_path]
 
     return None
+
+
+def _import_get_schema() -> Callable[[type], dict[str, Any]]:
+    """Import get_schema from the current SDK or its legacy location."""
+    try:
+        from genlayer._internal.get_schema import get_schema
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"genlayer._internal", "genlayer._internal.get_schema"}:
+            raise
+        from genlayer.py.get_schema import get_schema
+    return get_schema
 
 
 def load_sdk(
@@ -199,8 +211,8 @@ def load_sdk(
         src_path = path / "src" if (path / "src").exists() else path
         sys.path.insert(0, str(src_path))
 
-    # 8. Import get_schema
-    from genlayer.py.get_schema import get_schema
+    # 8. Import get_schema from the current SDK, falling back to the legacy layout.
+    get_schema = _import_get_schema()
 
     return get_schema, upgrade_notes
 

@@ -4,6 +4,8 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+from .ast_utils import is_contract_subclass
+
 
 @dataclass
 class StructureWarning:
@@ -50,19 +52,8 @@ class ContractStructureChecker(ast.NodeVisitor):
         self.is_contract_class = old_is_contract
 
     def _is_contract_subclass(self, node: ast.ClassDef) -> bool:
-        """Check if class inherits from gl.Contract or Contract."""
-        for base in node.bases:
-            if isinstance(base, ast.Attribute):
-                # gl.Contract
-                if (isinstance(base.value, ast.Name) and
-                    base.value.id == "gl" and
-                    base.attr == "Contract"):
-                    return True
-            elif isinstance(base, ast.Name):
-                # Contract (direct import)
-                if base.id == "Contract":
-                    return True
-        return False
+        """Check if the class inherits from a supported Contract base."""
+        return is_contract_subclass(node)
 
     def _check_contract_class(self, node: ast.ClassDef):
         """Check all rules for a contract class."""
@@ -296,16 +287,7 @@ class StorageClassChecker(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _is_contract_subclass(self, node: ast.ClassDef) -> bool:
-        for base in node.bases:
-            if isinstance(base, ast.Attribute):
-                if (isinstance(base.value, ast.Name) and
-                    base.value.id == "gl" and
-                    base.attr == "Contract"):
-                    return True
-            elif isinstance(base, ast.Name):
-                if base.id == "Contract":
-                    return True
-        return False
+        return is_contract_subclass(node)
 
     def _collect_storage_types(self, annotation: ast.expr | None):
         """Collect custom class types used in storage annotations."""
