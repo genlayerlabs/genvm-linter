@@ -289,3 +289,30 @@ def test_broken_new_sdk_is_not_masked_by_legacy_fallback(monkeypatch):
         assert exc.name == "genlayer._internal.calldata"
     else:
         raise AssertionError("expected the underlying ModuleNotFoundError to propagate")
+
+
+def test_generate_stubs_unpacks_extract_sdk_paths(monkeypatch, tmp_path):
+    """extract_sdk_paths returns (paths, notes).
+
+    stubs.py used to bind the whole tuple, so `sdk_paths[0]` was the list and
+    `sdk_path / "src"` raised TypeError -- and the `if not sdk_paths` guard
+    above it could never fire, because a 2-tuple is always truthy.
+    """
+    from genvm_linter import stubs
+
+    sdk_dir = tmp_path / "sdk"
+    (sdk_dir / "src" / "genlayer").mkdir(parents=True)
+
+    monkeypatch.setattr(stubs, "get_latest_version", lambda: "v0.6.0-rc1")
+    monkeypatch.setattr(stubs, "download_artifacts", lambda *a, **k: tmp_path / "bundle.tar.xz")
+    monkeypatch.setattr(
+        sdk_loader, "extract_sdk_paths", lambda *a, **k: ([sdk_dir], ["a note"])
+    )
+
+    # Only assert we get past the unpacking/path arithmetic without a TypeError.
+    try:
+        stubs.generate_stubs(output_path=tmp_path / "out")
+    except TypeError as exc:  # pragma: no cover - this is the regression
+        raise AssertionError(f"stub generation still mishandles the tuple: {exc}") from exc
+    except Exception:
+        pass

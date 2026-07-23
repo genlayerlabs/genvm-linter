@@ -329,7 +329,7 @@ def setup(version, contract, json_output):
             click.echo(f"Latest: {version}")
 
     if not json_output:
-        click.echo(f"Setting up GenVM SDK...")
+        click.echo("Setting up GenVM SDK...")
 
     def progress(downloaded: int, total: int):
         if not json_output and total > 0:

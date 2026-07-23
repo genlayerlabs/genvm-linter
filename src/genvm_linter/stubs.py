@@ -1,7 +1,6 @@
 """Generate type stubs for GenLayer SDK."""
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -331,7 +330,7 @@ def generate_stubs(
 
     # Extract SDK
     from .validate.sdk_loader import extract_sdk_paths
-    sdk_paths = extract_sdk_paths(tarball_path, {})
+    sdk_paths, _upgrade_notes = extract_sdk_paths(tarball_path, {})
 
     if not sdk_paths:
         raise RuntimeError("Could not extract SDK paths")
@@ -343,19 +342,19 @@ def generate_stubs(
     stubs_path.mkdir(parents=True, exist_ok=True)
 
     # Try to run stubgen
-    stubgen_success = False
     try:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(src_path)
 
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, "-m", "mypy.stubgen", "-p", "genlayer", "-o", str(stubs_path)],
             env=env,
             capture_output=True,
             text=True,
+            check=False,
         )
-        stubgen_success = result.returncode == 0
     except Exception:
+        # stubgen is best-effort; the stubs are created from scratch below.
         pass
 
     # Post-process or create from scratch
