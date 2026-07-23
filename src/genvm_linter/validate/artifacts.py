@@ -19,6 +19,9 @@ GITHUB_API_RELEASES = f"https://api.github.com/repos/{GENVM_REPO}/releases"
 RUNNER_BUNDLE_ASSETS = ("genvm-runners-all.tar.xz", "genvm-universal.tar.xz")
 GENVM_VERSION_ENV = "GENVM_VERSION"
 GENVM_ALLOW_PRERELEASE_ENV = "GENVM_ALLOW_PRERELEASE"
+GENVM_SOURCE_MODE_ENV = "GENVM_SOURCE_MODE"
+GENVM_PREBUILT_DIR_ENV = "GENVM_PREBUILT_DIR"
+GENVMROOT_ENV = "GENVMROOT"
 FALLBACK_VERSION = "v0.6.0-rc1"
 RUNNER_INDEX_VERSION = 2
 
@@ -189,6 +192,72 @@ def download_artifacts(version: str | None = None, progress_callback=None) -> Pa
     ) from last_error
 
 
+def _configured_prebuilt_root() -> tuple[str, Path] | None:
+    """Return the configured prebuilt root and the env var that selected it."""
+    for env_var in (GENVM_PREBUILT_DIR_ENV, GENVMROOT_ENV):
+        value = os.environ.get(env_var)
+        if value:
+            return env_var, Path(value).expanduser()
+    return None
+
+
+def _prebuilt_root_error(root: Path) -> str | None:
+    """Describe why a path is not a usable GenVM tree."""
+    if not root.is_dir():
+        return "the path is not a directory"
+
+    missing = []
+    if not (root / "bin" / "genvm-modules").is_file():
+        missing.append("bin/genvm-modules")
+    if not (root / "runners").is_dir():
+        missing.append("runners/")
+    if missing:
+        return f"missing {', '.join(missing)}"
+    return None
+
+
+def resolve_artifact_source(
+    version: str | None = None,
+    progress_callback=None,
+) -> Path:
+    """Resolve a prebuilt GenVM tree or a downloaded release bundle.
+
+    GENVM_SOURCE_MODE=prebuilt requires a usable tree and never downloads.
+    GENVM_SOURCE_MODE=release always uses the release bundle. With no explicit
+    mode, a usable configured tree wins and an absent or unusable tree falls
+    back to the existing release behavior.
+    """
+    mode = os.environ.get(GENVM_SOURCE_MODE_ENV, "").strip()
+    if mode not in {"", "prebuilt", "release"}:
+        raise ValueError(
+            f"Invalid {GENVM_SOURCE_MODE_ENV}={mode!r}; expected 'prebuilt', "
+            "'release', or an empty value for auto mode"
+        )
+
+    configured = _configured_prebuilt_root()
+    if mode != "release" and configured is not None:
+        env_var, root = configured
+        error = _prebuilt_root_error(root)
+        if error is None:
+            return root
+        if mode == "prebuilt":
+            raise RuntimeError(
+                f"{GENVM_SOURCE_MODE_ENV}=prebuilt selected {env_var}={str(root)!r}, "
+                f"but that GenVM tree is unusable: {error}. Build GenVM first or "
+                f"point {GENVM_PREBUILT_DIR_ENV} at a tree containing "
+                "bin/genvm-modules and runners/."
+            )
+
+    if mode == "prebuilt":
+        raise RuntimeError(
+            f"{GENVM_SOURCE_MODE_ENV}=prebuilt requires {GENVM_PREBUILT_DIR_ENV} "
+            f"(preferred) or {GENVMROOT_ENV} to point at a GenVM tree containing "
+            "bin/genvm-modules and runners/."
+        )
+
+    return download_artifacts(version, progress_callback=progress_callback)
+
+
 def list_available_versions() -> list[dict]:
     """Fetch all available GenVM release versions from GitHub.
 
@@ -226,7 +295,7 @@ def hash_to_tar_path(runner_type: str, hash_val: str) -> str:
     return f"runners/{runner_type}/{dir_prefix}/{file_suffix}.tar"
 
 
-def _get_runner_index(tarball_path: Path) -> dict[str, list[str]]:
+def _get_bundle_runner_index(tarball_path: Path) -> dict[str, list[str]]:
     """Get or build a cached index of runner members in the tarball.
 
     First call decompresses the tarball and saves the index as JSON.
@@ -256,36 +325,71 @@ def _get_runner_index(tarball_path: Path) -> dict[str, list[str]]:
     return index
 
 
+def _get_prebuilt_runner_index(root: Path) -> dict[str, list[str]]:
+    """Index runner tarballs directly from a prebuilt GenVM tree."""
+    index: dict[str, list[str]] = {}
+
+    current_root = root / "runners"
+    for runner_path in sorted(current_root.glob("*/*/*.tar")):
+        relative_path = runner_path.relative_to(root).as_posix()
+        runner_type = relative_path.split("/")[1]
+        index.setdefault(runner_type, []).append(relative_path)
+
+    executor_root = root / "executor"
+    for runner_path in sorted(executor_root.glob("*/legacy-runners/*/*/*.tar")):
+        relative_path = runner_path.relative_to(root).as_posix()
+        runner_type = relative_path.split("/")[3]
+        index.setdefault(runner_type, []).append(relative_path)
+
+    return index
+
+
+def _get_runner_index(artifact_path: Path) -> dict[str, list[str]]:
+    """Get the runner index for either a release bundle or prebuilt tree."""
+    if artifact_path.is_dir():
+        return _get_prebuilt_runner_index(artifact_path)
+    return _get_bundle_runner_index(artifact_path)
+
+
 def _runner_hash_from_tar_path(tar_member_path: str) -> str:
     """Recover a runner hash from either supported bundle member layout."""
     parts = tar_member_path.split("/")
     return parts[-2] + parts[-1].removesuffix(".tar")
 
 
-def _find_runner_tar_path(
-    tarball_path: Path,
+def _select_runner_tar_path(
+    runner_paths: list[str],
     runner_type: str,
     hash_val: str,
 ) -> str:
-    """Find a runner member, preferring the current layout over the legacy one."""
+    """Select a runner path, preferring the current layout over legacy."""
     current_path = hash_to_tar_path(runner_type, hash_val)
-    runners = _get_runner_index(tarball_path).get(runner_type, [])
-    if current_path in runners:
+    if current_path in runner_paths:
         return current_path
 
     legacy_suffix = f"/legacy-runners/{runner_type}/{hash_val[:2]}/{hash_val[2:]}.tar"
-    for runner_path in runners:
+    for runner_path in runner_paths:
         if runner_path.startswith("executor/") and runner_path.endswith(legacy_suffix):
             return runner_path
     return current_path
 
 
-def find_latest_runner(tarball_path: Path, runner_type: str) -> str | None:
-    """Find the latest version hash for a runner type in the tarball.
+def _find_runner_tar_path(
+    artifact_path: Path,
+    runner_type: str,
+    hash_val: str,
+) -> str:
+    """Find a runner in either source, preferring current layout over legacy."""
+    runners = _get_runner_index(artifact_path).get(runner_type, [])
+    return _select_runner_tar_path(runners, runner_type, hash_val)
 
-    Uses a cached index file — no tarball decompression after first call.
+
+def find_latest_runner(artifact_path: Path, runner_type: str) -> str | None:
+    """Find the latest version hash for a runner type in the artifact source.
+
+    Release bundles use a cached index file, avoiding repeat decompression.
     """
-    index = _get_runner_index(tarball_path)
+    index = _get_runner_index(artifact_path)
     runners = index.get(runner_type, [])
 
     if runners:
@@ -295,13 +399,16 @@ def find_latest_runner(tarball_path: Path, runner_type: str) -> str | None:
     return None
 
 
-def extract_runner(tarball_path: Path, runner_type: str, hash_val: str) -> Path:
-    """Extract a specific runner from genvm-universal.tar.xz.
+def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path:
+    """Extract a specific runner from a bundle or prebuilt GenVM tree.
 
-    Only decompresses the tarball if the runner isn't already cached on disk.
+    Only extracts the runner if it is not already cached on disk.
     """
-    version = tarball_path.stem.replace("genvm-universal-", "")
-    extract_base = get_cache_dir() / "extracted" / version
+    if artifact_path.is_dir():
+        source_namespace = "prebuilt"
+    else:
+        source_namespace = artifact_path.stem.replace("genvm-universal-", "")
+    extract_base = get_cache_dir() / "extracted" / source_namespace
     runner_path = extract_base / runner_type / hash_val
 
     if runner_path.exists() and any(runner_path.iterdir()):
@@ -310,16 +417,20 @@ def extract_runner(tarball_path: Path, runner_type: str, hash_val: str) -> Path:
     runner_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        tar_member_path = _find_runner_tar_path(tarball_path, runner_type, hash_val)
-        with tarfile.open(tarball_path, "r:xz") as outer_tar:
-            inner_tar_member = outer_tar.getmember(tar_member_path)
-            inner_tar_file = outer_tar.extractfile(inner_tar_member)
-
-            if inner_tar_file is None:
-                raise RuntimeError(f"Could not extract {tar_member_path}")
-
-            with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
+        tar_member_path = _find_runner_tar_path(artifact_path, runner_type, hash_val)
+        if artifact_path.is_dir():
+            with tarfile.open(artifact_path / tar_member_path, mode="r:") as inner_tar:
                 inner_tar.extractall(runner_path, filter="data")
+        else:
+            with tarfile.open(artifact_path, "r:xz") as outer_tar:
+                inner_tar_member = outer_tar.getmember(tar_member_path)
+                inner_tar_file = outer_tar.extractfile(inner_tar_member)
+
+                if inner_tar_file is None:
+                    raise RuntimeError(f"Could not extract {tar_member_path}")
+
+                with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
+                    inner_tar.extractall(runner_path, filter="data")
 
         return runner_path
     except Exception:

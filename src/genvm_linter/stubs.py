@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from .validate.artifacts import download_artifacts, get_latest_version
-from .validate.sdk_loader import get_sdk_paths_from_genvmroot, extract_sdk_paths, parse_contract_header
 
 CACHE_DIR = Path.home() / ".cache" / "genvm-linter" / "stubs"
 
