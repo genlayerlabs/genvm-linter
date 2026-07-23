@@ -4,6 +4,8 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+from .ast_utils import is_contract_subclass
+
 # Modules that are forbidden in GenLayer contracts (non-deterministic)
 FORBIDDEN_MODULES = frozenset({
     "random",
@@ -171,14 +173,8 @@ class SafetyChecker(ast.NodeVisitor):
         return ""
 
     def _is_contract_class(self, node: ast.ClassDef) -> bool:
-        """Check if a class inherits from gl.Contract / genlayer.Contract / Contract."""
-        for base in node.bases:
-            if isinstance(base, ast.Attribute) and base.attr == "Contract":
-                if isinstance(base.value, ast.Name) and base.value.id in ("gl", "genlayer"):
-                    return True
-            if isinstance(base, ast.Name) and base.id == "Contract":
-                return True
-        return False
+        """Check if the class inherits from a supported Contract base."""
+        return is_contract_subclass(node)
 
     def _get_exception_name(self, node: ast.expr) -> str:
         """Extract the exception class name from a raise target."""

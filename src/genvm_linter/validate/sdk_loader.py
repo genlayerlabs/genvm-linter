@@ -9,10 +9,11 @@ from typing import Any, Callable
 from unittest.mock import MagicMock
 
 from .artifacts import (
-    download_artifacts,
+    GITHUB_RELEASES_URL,
     extract_runner,
     find_latest_runner,
     parse_runner_manifest,
+    resolve_artifact_source,
 )
 
 
@@ -81,7 +82,7 @@ def extract_sdk_paths(
         if latest_hash and latest_hash != genlayer_hash:
             notes.append(
                 f"py-genlayer: a newer runner is available ({latest_hash}). "
-                f"See https://github.com/genlayerlabs/genvm/releases for changes."
+                f"See {GITHUB_RELEASES_URL} for changes."
             )
     else:
         genlayer_hash = find_latest_runner(tarball_path, "py-genlayer")
@@ -119,7 +120,7 @@ def extract_sdk_paths(
             if latest_emb and latest_emb != emb_hash:
                 notes.append(
                     f"py-lib-genlayer-embeddings: a newer runner is available ({latest_emb}). "
-                    f"See https://github.com/genlayerlabs/genvm/releases for changes."
+                    f"See {GITHUB_RELEASES_URL} for changes."
                 )
         emb_path = extract_runner(tarball_path, "py-lib-genlayer-embeddings", emb_hash)
         paths.append(emb_path)
@@ -127,32 +128,15 @@ def extract_sdk_paths(
     return paths, notes
 
 
-def get_sdk_paths_from_genvmroot() -> list[Path] | None:
-    """
-    Get SDK paths from GENVMROOT environment variable if available.
-
-    This reuses GenVM artifacts already downloaded by studio/other tools.
-    Returns None if GENVMROOT is not set or SDK not found.
-    """
-    genvmroot = os.environ.get("GENVMROOT")
-    if not genvmroot:
-        return None
-
-    genvm_path = Path(genvmroot)
-    if not genvm_path.exists():
-        return None
-
-    # Studio layout: /genvm/runners/genlayer-py-std/src
-    sdk_path = genvm_path / "runners" / "genlayer-py-std" / "src"
-    if sdk_path.exists():
-        return [sdk_path]
-
-    # Alternative: /genvm/runners/py-lib-genlayer-std/src
-    alt_path = genvm_path / "runners" / "py-lib-genlayer-std" / "src"
-    if alt_path.exists():
-        return [alt_path]
-
-    return None
+def _import_get_schema() -> Callable[[type], dict[str, Any]]:
+    """Import get_schema from the current SDK or its legacy location."""
+    try:
+        from genlayer._internal.get_schema import get_schema
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"genlayer._internal", "genlayer._internal.get_schema"}:
+            raise
+        from genlayer.py.get_schema import get_schema
+    return get_schema
 
 
 def load_sdk(
@@ -170,8 +154,8 @@ def load_sdk(
         Tuple of (get_schema function, upgrade_notes list)
 
     Note:
-        If GENVMROOT env var is set, reuses SDK from that location
-        instead of downloading. This is useful in studio/CI environments.
+        GENVM_SOURCE_MODE controls whether artifacts come from a prebuilt
+        GenVM tree or a downloaded release bundle.
     """
     # 1. CRITICAL: Import numpy BEFORE SDK
     # SDK's _internal/numpy.py only registers numpy types if numpy is already imported
@@ -180,27 +164,22 @@ def load_sdk(
     # 2. Mock WASI
     setup_wasi_mocks()
 
-    # 3. Try to use GENVMROOT if available (reuse studio's GenVM)
-    sdk_paths = get_sdk_paths_from_genvmroot()
-    upgrade_notes: list[str] = []
+    # 3. Parse contract header for runner hashes
+    dependencies = parse_contract_header(contract_path)
 
-    if sdk_paths is None:
-        # 4. Parse contract header for version info
-        dependencies = parse_contract_header(contract_path)
+    # 4. Resolve a prebuilt tree or download a release bundle
+    artifact_path = resolve_artifact_source(progress_callback=progress_callback)
 
-        # 5. Download artifacts if needed
-        tarball_path = download_artifacts(progress_callback=progress_callback)
+    # 5. Extract SDK paths from the selected source
+    sdk_paths, upgrade_notes = extract_sdk_paths(artifact_path, dependencies)
 
-        # 6. Extract SDK paths
-        sdk_paths, upgrade_notes = extract_sdk_paths(tarball_path, dependencies)
-
-    # 7. Add SDK to path
+    # 6. Add SDK to path
     for path in reversed(sdk_paths):
         src_path = path / "src" if (path / "src").exists() else path
         sys.path.insert(0, str(src_path))
 
-    # 8. Import get_schema
-    from genlayer.py.get_schema import get_schema
+    # 7. Import get_schema from the current SDK, falling back to the legacy layout.
+    get_schema = _import_get_schema()
 
     return get_schema, upgrade_notes
 
