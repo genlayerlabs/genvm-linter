@@ -95,6 +95,18 @@ def _cache_prefix() -> str:
     return f"genvm-universal-{_cache_repo_slug()}-"
 
 
+def _cached_bundle_version(path: Path) -> str | None:
+    prefix = _cache_prefix()
+    suffix = ".tar.xz"
+    if not path.name.startswith(prefix) or not path.name.endswith(suffix):
+        return None
+    return path.name[len(prefix) : -len(suffix)]
+
+
+def _extracted_namespace(version: str) -> str:
+    return f"{_cache_repo_slug()}-{version}"
+
+
 def list_cached_versions() -> list[str]:
     """List cached GenVM versions for the CURRENT repo, newest first.
 
@@ -407,7 +419,13 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
     if artifact_path.is_dir():
         source_namespace = "prebuilt"
     else:
-        source_namespace = artifact_path.stem.replace("genvm-universal-", "")
+        version = _cached_bundle_version(artifact_path)
+        if version is not None:
+            source_namespace = _extracted_namespace(version)
+        else:
+            source_namespace = artifact_path.name.removeprefix(
+                "genvm-universal-"
+            ).removesuffix(".tar.xz")
     extract_base = get_cache_dir() / "extracted" / source_namespace
     runner_path = extract_base / runner_type / hash_val
 
@@ -485,8 +503,8 @@ def clean_cache(
     bytes_freed = 0
 
     # Clean tarballs
-    for f in get_cache_dir().glob("genvm-universal-*.tar.xz"):
-        version = f.name.replace("genvm-universal-", "").replace(".tar.xz", "")
+    for f in get_cache_dir().glob(f"{_cache_prefix()}*.tar.xz"):
+        version = _cached_bundle_version(f)
         if version not in keep:
             bytes_freed += f.stat().st_size
             f.unlink()
@@ -495,8 +513,14 @@ def clean_cache(
     # Clean extracted directories
     extracted_dir = get_cache_dir() / "extracted"
     if extracted_dir.exists():
+        kept_namespaces = {_extracted_namespace(version) for version in keep}
+        current_namespace_prefix = f"{_cache_repo_slug()}-"
         for d in extracted_dir.iterdir():
-            if d.is_dir() and d.name not in keep:
+            if (
+                d.is_dir()
+                and d.name.startswith(current_namespace_prefix)
+                and d.name not in kept_namespaces
+            ):
                 for f in d.rglob("*"):
                     if f.is_file():
                         bytes_freed += f.stat().st_size
