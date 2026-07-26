@@ -208,14 +208,21 @@ class ContractStructureChecker(ast.NodeVisitor):
             # Check for Literal[N]
             if isinstance(size_arg, ast.Subscript):
                 if isinstance(size_arg.value, ast.Name) and size_arg.value.id == "Literal":
-                    if isinstance(size_arg.slice, ast.Constant):
-                        if not isinstance(size_arg.slice.value, int) or size_arg.slice.value <= 0:
-                            self.warnings.append(StructureWarning(
-                                code="E017",
-                                msg=f"Array size for '{field_name}' must be positive integer",
-                                line=node.lineno,
-                                col=node.col_offset,
-                            ))
+                    try:
+                        size = ast.literal_eval(size_arg.slice)
+                    except (TypeError, ValueError):
+                        return
+                    if (
+                        not isinstance(size, int)
+                        or isinstance(size, bool)
+                        or size <= 0
+                    ):
+                        self.warnings.append(StructureWarning(
+                            code="E017",
+                            msg=f"Array size for '{field_name}' must be positive integer",
+                            line=node.lineno,
+                            col=node.col_offset,
+                        ))
 
     def _check_treemap_key(self, node: ast.AnnAssign, field_name: str, annotation: ast.Subscript):
         """Check that TreeMap key type is Comparable (str, Address, u32, u256, etc.)."""

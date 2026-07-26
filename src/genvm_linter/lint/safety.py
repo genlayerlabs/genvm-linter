@@ -511,6 +511,17 @@ _NONDET_MESSAGES = {
     "E026": "storage writes are forbidden in non-deterministic contexts",
 }
 
+_STORAGE_MUTATOR_METHODS = frozenset({
+    "append",
+    "clear",
+    "extend",
+    "insert",
+    "pop",
+    "remove",
+    "setdefault",
+    "update",
+})
+
 
 def _find_evm_interface_classes(tree: ast.Module) -> set[str]:
     """Find class names decorated with @gl.evm.contract_interface."""
@@ -580,6 +591,15 @@ class ForbiddenInNondetFinder(ast.NodeVisitor):
         # E023: .emit()
         if isinstance(node.func, ast.Attribute) and node.func.attr == "emit":
             self._add("E023", ".emit()", node)
+
+        # E026: mutating a container stored on self is a storage write too.
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _STORAGE_MUTATOR_METHODS
+        ):
+            field = self._self_storage_field(node.func.value)
+            if field:
+                self._add("E026", f"self.{field}.{node.func.attr}()", node)
 
         call_name = self._get_full_call_name(node)
 
