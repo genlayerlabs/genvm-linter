@@ -387,6 +387,39 @@ class TestCacheRepositoryNamespacing:
         assert artifacts.resolve_version() == "v0.6.0-rc1"
 
 
+class TestCleanCacheNamespacing:
+    def test_preserves_kept_namespaced_bundle_and_extraction(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(artifacts, "get_cache_dir", lambda: tmp_path)
+        keep = "v0.6.0-rc1"
+        stale = "v0.5.0"
+        keep_bundle = tmp_path / f"{artifacts._cache_prefix()}{keep}.tar.xz"
+        stale_bundle = tmp_path / f"{artifacts._cache_prefix()}{stale}.tar.xz"
+        foreign_bundle = (
+            tmp_path / "genvm-universal-example-other-v9.9.9.tar.xz"
+        )
+        for bundle in (keep_bundle, stale_bundle, foreign_bundle):
+            bundle.write_bytes(b"bundle")
+
+        extracted = tmp_path / "extracted"
+        keep_dir = extracted / artifacts._extracted_namespace(keep)
+        stale_dir = extracted / artifacts._extracted_namespace(stale)
+        foreign_dir = extracted / "example-other-v9.9.9"
+        for directory in (keep_dir, stale_dir, foreign_dir):
+            directory.mkdir(parents=True)
+            (directory / "runner.json").write_text("{}")
+
+        artifacts.clean_cache(keep_versions=[keep], keep_latest=False)
+
+        assert keep_bundle.exists()
+        assert keep_dir.exists()
+        assert not stale_bundle.exists()
+        assert not stale_dir.exists()
+        assert foreign_bundle.exists()
+        assert foreign_dir.exists()
+
+
 class TestNoBundledReleaseWarning:
     def test_warns_when_no_release_ships_a_bundle(self, monkeypatch, capsys):
         payload = [{"tag_name": "v1.0.0", "prerelease": False, "assets": []}]
