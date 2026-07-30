@@ -18,6 +18,25 @@ GITHUB_API_RELEASES = f"https://api.github.com/repos/{GENVM_REPO}/releases"
 # GenVM 0.3.0 renamed this bundle from genvm-universal.tar.xz; newest name first.
 RUNNER_BUNDLE_ASSETS = ("genvm-runners-all.tar.xz", "genvm-universal.tar.xz")
 GENVM_VERSION_ENV = "GENVM_VERSION"
+
+# tarfile's extraction `filter=` kwarg (PEP 706) is mandatory from Python 3.12+
+# but was only opt-in-backported to some 3.9/3.10/3.11 patch releases, not
+# all of them. A version_info check alone is therefore unreliable; detect
+# actual support on the running interpreter instead.
+_EXTRACTALL_SUPPORTS_FILTER = hasattr(tarfile, "data_filter")
+
+
+def _safe_extractall(tar: "tarfile.TarFile", path: Path) -> None:
+    """Extract a tarball using the 'data' filter when available.
+
+    Falls back to a plain extractall() on Python interpreters whose tarfile
+    module predates PEP 706 support, instead of raising
+    `TypeError: extractall() got an unexpected keyword argument 'filter'`.
+    """
+    if _EXTRACTALL_SUPPORTS_FILTER:
+        tar.extractall(path, filter="data")
+    else:
+        tar.extractall(path)
 GENVM_ALLOW_PRERELEASE_ENV = "GENVM_ALLOW_PRERELEASE"
 GENVM_SOURCE_MODE_ENV = "GENVM_SOURCE_MODE"
 GENVM_PREBUILT_DIR_ENV = "GENVM_PREBUILT_DIR"
@@ -438,7 +457,7 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
         tar_member_path = _find_runner_tar_path(artifact_path, runner_type, hash_val)
         if artifact_path.is_dir():
             with tarfile.open(artifact_path / tar_member_path, mode="r:") as inner_tar:
-                inner_tar.extractall(runner_path, filter="data")
+                _safe_extractall(inner_tar, runner_path)
         else:
             with tarfile.open(artifact_path, "r:xz") as outer_tar:
                 inner_tar_member = outer_tar.getmember(tar_member_path)
@@ -448,7 +467,7 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
                     raise RuntimeError(f"Could not extract {tar_member_path}")
 
                 with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
-                    inner_tar.extractall(runner_path, filter="data")
+                    _safe_extractall(inner_tar, runner_path)
 
         return runner_path
     except Exception:

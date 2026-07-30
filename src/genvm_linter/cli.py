@@ -29,6 +29,24 @@ from .validate.sdk_loader import extract_sdk_paths, parse_contract_header
 SUBCOMMANDS = {"check", "lint", "validate", "schema", "download", "stubs", "setup", "cache", "typecheck"}
 
 
+def _ensure_utf8_stdio() -> None:
+    """Make stdout/stderr tolerant of the Unicode symbols (✓/✗/ℹ) we print.
+
+    On Windows, the console's active codepage is often not UTF-8 (e.g. cp1254
+    for Turkish locales). Printing a checkmark then raises UnicodeEncodeError
+    and crashes the whole command even though lint/validate succeeded. We
+    reconfigure the streams to UTF-8 with 'replace' as a fallback so output
+    never crashes the process; worst case a few glyphs render as '?'.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def print_progress(downloaded: int, total: int):
     """Print download progress."""
     if total > 0:
@@ -579,6 +597,7 @@ def cache_clean(keep, clean_all, dry_run):
 
 def cli():
     """Entry point that handles both legacy and modern invocation."""
+    _ensure_utf8_stdio()
     if _is_legacy_invocation():
         _run_legacy_lint()
     else:
