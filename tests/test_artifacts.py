@@ -430,3 +430,41 @@ class TestNoBundledReleaseWarning:
         )
         assert artifacts.get_latest_version() == artifacts.FALLBACK_VERSION
         assert "ships a known runner bundle" in capsys.readouterr().err
+
+
+class TestSafeExtractall:
+    """Regression tests for issue #17: TarFile.extractall(filter=...) is not
+    available on every Python 3.9/3.10/3.11 patch release (PEP 706 was
+    backported inconsistently, mandatory only from 3.12+)."""
+
+    def _make_tar(self, tmp_path):
+        src = tmp_path / "hello.txt"
+        src.write_text("hi")
+        tar_path = tmp_path / "a.tar"
+        with tarfile.open(tar_path, "w") as t:
+            t.add(src, arcname="hello.txt")
+        return tar_path
+
+    def test_extracts_with_filter_when_supported(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", True)
+        tar_path = self._make_tar(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        with tarfile.open(tar_path) as t:
+            artifacts._safe_extractall(t, out_dir)
+
+        assert (out_dir / "hello.txt").read_text() == "hi"
+
+    def test_falls_back_without_filter_on_old_interpreters(self, tmp_path, monkeypatch):
+        """Must not raise TypeError on interpreters whose tarfile predates
+        the 'filter' kwarg (e.g. stock Python 3.10.0)."""
+        monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", False)
+        tar_path = self._make_tar(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        with tarfile.open(tar_path) as t:
+            artifacts._safe_extractall(t, out_dir)  # would raise TypeError pre-fix
+
+        assert (out_dir / "hello.txt").read_text() == "hi"
