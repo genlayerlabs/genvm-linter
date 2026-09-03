@@ -18,6 +18,62 @@ GITHUB_API_RELEASES = f"https://api.github.com/repos/{GENVM_REPO}/releases"
 # GenVM 0.3.0 renamed this bundle from genvm-universal.tar.xz; newest name first.
 RUNNER_BUNDLE_ASSETS = ("genvm-runners-all.tar.xz", "genvm-universal.tar.xz")
 GENVM_VERSION_ENV = "GENVM_VERSION"
+
+# tarfile's extraction `filter=` kwarg (PEP 706) is mandatory from Python 3.12+
+# but was only opt-in-backported to some 3.9/3.10/3.11 patch releases, not
+# all of them. A version_info check alone is therefore unreliable; detect
+# actual support on the running interpreter instead.
+_EXTRACTALL_SUPPORTS_FILTER = hasattr(tarfile, "data_filter")
+
+
+def _reject_unsafe_tar_member(member: "tarfile.TarInfo", dest: Path) -> None:
+    """Manual equivalent of tarfile's 'data' filter (PEP 706) for interpreters
+    that predate it — used by _safe_extractall's legacy fallback below.
+
+    Raises ValueError on anything a crafted archive could use to write
+    outside `dest` (path traversal / "Zip Slip", CWE-22) or to plant an
+    unexpected special file: an absolute or ../-escaping member path, a
+    symlink/hardlink whose target resolves outside `dest`, or a device/FIFO
+    file.
+    """
+    dest_resolved = dest.resolve()
+    target = (dest / member.name).resolve()
+    if target != dest_resolved and dest_resolved not in target.parents:
+        raise ValueError(
+            f"refusing to extract {member.name!r}: escapes destination directory"
+        )
+    if member.issym() or member.islnk():
+        link_target = (dest / member.name).parent / member.linkname
+        link_target = link_target.resolve()
+        if link_target != dest_resolved and dest_resolved not in link_target.parents:
+            raise ValueError(
+                f"refusing to extract {member.name!r}: link target escapes destination directory"
+            )
+    if member.isdev():
+        raise ValueError(
+            f"refusing to extract {member.name!r}: device/FIFO files are not allowed"
+        )
+
+
+def _safe_extractall(tar: "tarfile.TarFile", path: Path) -> None:
+    """Extract a tarball using the 'data' filter when available.
+
+    Falls back to a plain extractall() on Python interpreters whose tarfile
+    module predates PEP 706 support, instead of raising
+    `TypeError: extractall() got an unexpected keyword argument 'filter'`.
+    The fallback validates every member first (see
+    _reject_unsafe_tar_member) so it isn't a path-traversal downgrade on
+    those older interpreters.
+    """
+    if _EXTRACTALL_SUPPORTS_FILTER:
+        tar.extractall(path, filter="data")
+    else:
+        dest = Path(path)
+        dest.mkdir(parents=True, exist_ok=True)
+        members = tar.getmembers()
+        for member in members:
+            _reject_unsafe_tar_member(member, dest)
+        tar.extractall(dest, members=members)
 GENVM_ALLOW_PRERELEASE_ENV = "GENVM_ALLOW_PRERELEASE"
 GENVM_SOURCE_MODE_ENV = "GENVM_SOURCE_MODE"
 GENVM_PREBUILT_DIR_ENV = "GENVM_PREBUILT_DIR"
@@ -438,7 +494,7 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
         tar_member_path = _find_runner_tar_path(artifact_path, runner_type, hash_val)
         if artifact_path.is_dir():
             with tarfile.open(artifact_path / tar_member_path, mode="r:") as inner_tar:
-                inner_tar.extractall(runner_path, filter="data")
+                _safe_extractall(inner_tar, runner_path)
         else:
             with tarfile.open(artifact_path, "r:xz") as outer_tar:
                 inner_tar_member = outer_tar.getmember(tar_member_path)
@@ -448,7 +504,7 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
                     raise RuntimeError(f"Could not extract {tar_member_path}")
 
                 with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
-                    inner_tar.extractall(runner_path, filter="data")
+                    _safe_extractall(inner_tar, runner_path)
 
         return runner_path
     except Exception:
