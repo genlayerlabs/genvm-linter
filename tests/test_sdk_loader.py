@@ -4,6 +4,7 @@ import io
 import json
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 from types import ModuleType
 
@@ -66,6 +67,26 @@ def _write_runner_tar(
             member.size = len(payload)
             runner_tar.addfile(member, io.BytesIO(payload))
     return tar_path
+
+
+def _write_runner_zip(
+    root: Path,
+    runner_type: str,
+    runner_hash: str,
+    files: dict[str, bytes],
+) -> Path:
+    zip_path = (
+        root
+        / "runners"
+        / runner_type
+        / runner_hash[:2]
+        / f"{runner_hash[2:]}.zip"
+    )
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, mode="w") as runner_zip:
+        for name, payload in files.items():
+            runner_zip.writestr(name, payload)
+    return zip_path
 
 
 def _write_sdk_runners(
@@ -133,6 +154,42 @@ def test_prebuilt_tree_is_preferred_and_resolves_sdk(monkeypatch, tmp_path):
         / std_hash
     ]
     assert (sdk_paths[0] / "src" / "genlayer" / "__init__.py").is_file()
+
+
+def test_prebuilt_zip_layout_resolves_transitive_sdk(monkeypatch, tmp_path):
+    _clear_source_environment(monkeypatch)
+    root = _make_usable_prebuilt_root(tmp_path)
+    genlayer_hash = "5jgenlayerhash"
+    std_hash = "kzstdlibhash"
+    runner_manifest = {
+        "Seq": [{"Depends": f"py-lib-genlayer-std:{std_hash}"}],
+    }
+    _write_runner_zip(
+        root,
+        "py-genlayer",
+        genlayer_hash,
+        {"runner.json": json.dumps(runner_manifest).encode()},
+    )
+    _write_runner_zip(
+        root,
+        "py-lib-genlayer-std",
+        std_hash,
+        {"genlayer/__init__.py": b""},
+    )
+    monkeypatch.setenv(artifacts.GENVM_SOURCE_MODE_ENV, "prebuilt")
+    monkeypatch.setenv(artifacts.GENVM_PREBUILT_DIR_ENV, str(root))
+    monkeypatch.setattr(artifacts, "CACHE_DIR", tmp_path / "cache")
+
+    artifact_path = artifacts.resolve_artifact_source()
+    sdk_paths, notes = sdk_loader.extract_sdk_paths(
+        artifact_path,
+        {"py-genlayer": genlayer_hash},
+    )
+
+    assert artifact_path == root
+    assert notes == []
+    assert sdk_paths[0].name == std_hash
+    assert (sdk_paths[0] / "genlayer" / "__init__.py").is_file()
 
 
 def test_explicit_broken_prebuilt_tree_hard_fails(monkeypatch, tmp_path):

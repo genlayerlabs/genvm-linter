@@ -5,6 +5,7 @@ import io
 import json
 import tarfile
 import urllib.error
+import zipfile
 
 from genvm_linter.validate import artifacts
 
@@ -28,28 +29,53 @@ class _FakeResponse:
 
 
 class TestResolveVersion:
-    """resolve_version() precedence: env var > cache > latest release."""
+    """resolve_version() precedence: env var > latest release > offline cache."""
 
     def test_env_var_takes_precedence(self, monkeypatch):
         monkeypatch.setenv(artifacts.GENVM_VERSION_ENV, "v1.2.3")
         monkeypatch.setattr(artifacts, "list_cached_versions", lambda: ["v0.2.16"])
-        monkeypatch.setattr(artifacts, "get_latest_version", lambda: "v0.9.9")
+        monkeypatch.setattr(
+            artifacts, "_fetch_latest_release_version", lambda: "v0.9.9"
+        )
 
         assert artifacts.resolve_version() == "v1.2.3"
 
-    def test_falls_back_to_newest_cached_version(self, monkeypatch):
+    def test_latest_release_supersedes_a_stale_cached_version(self, monkeypatch):
         monkeypatch.delenv(artifacts.GENVM_VERSION_ENV, raising=False)
-        monkeypatch.setattr(artifacts, "list_cached_versions", lambda: ["v0.2.16"])
-        monkeypatch.setattr(artifacts, "get_latest_version", lambda: "v0.9.9")
+        monkeypatch.setattr(artifacts, "list_cached_versions", lambda: ["v0.6.0-rc1"])
+        monkeypatch.setattr(
+            artifacts, "_fetch_latest_release_version", lambda: "v0.6.0-rc3"
+        )
 
-        assert artifacts.resolve_version() == "v0.2.16"
+        assert artifacts.resolve_version() == "v0.6.0-rc3"
 
-    def test_falls_back_to_latest_when_no_cache(self, monkeypatch):
+    def test_falls_back_to_newest_cache_when_release_lookup_fails(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.delenv(artifacts.GENVM_VERSION_ENV, raising=False)
+        monkeypatch.setattr(artifacts, "list_cached_versions", lambda: ["v0.6.0-rc1"])
+
+        def _offline():
+            raise OSError("network down")
+
+        monkeypatch.setattr(artifacts, "_fetch_latest_release_version", _offline)
+
+        assert artifacts.resolve_version() == "v0.6.0-rc1"
+        assert "checking the local cache" in capsys.readouterr().err
+
+    def test_uses_current_fallback_when_offline_without_cache(
+        self, monkeypatch, capsys
+    ):
         monkeypatch.delenv(artifacts.GENVM_VERSION_ENV, raising=False)
         monkeypatch.setattr(artifacts, "list_cached_versions", lambda: [])
-        monkeypatch.setattr(artifacts, "get_latest_version", lambda: "v0.9.9")
 
-        assert artifacts.resolve_version() == "v0.9.9"
+        def _offline():
+            raise OSError("network down")
+
+        monkeypatch.setattr(artifacts, "_fetch_latest_release_version", _offline)
+
+        assert artifacts.resolve_version() == "v0.6.0-rc3"
+        assert "checking the local cache" in capsys.readouterr().err
 
 
 class TestGetLatestVersion:
@@ -305,6 +331,33 @@ class TestDownloadArtifacts:
 class TestRunnerPathLookup:
     """Runner lookup supports current and manager legacy bundle layouts."""
 
+    def test_extract_runner_supports_current_zip_layout(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(artifacts, "CACHE_DIR", tmp_path / "cache")
+        runner_hash = "5jcurrenthash"
+        current_path = (
+            f"runners/py-genlayer/{runner_hash[:2]}/{runner_hash[2:]}.zip"
+        )
+
+        inner_bytes = io.BytesIO()
+        with zipfile.ZipFile(inner_bytes, mode="w") as inner_zip:
+            inner_zip.writestr("runner.json", '{"Seq": []}')
+
+        tarball_path = tmp_path / f"{artifacts._cache_prefix()}v0.6.0-rc3.tar.xz"
+        with tarfile.open(tarball_path, mode="w:xz") as outer_tar:
+            member = tarfile.TarInfo(current_path)
+            member.size = len(inner_bytes.getvalue())
+            outer_tar.addfile(member, io.BytesIO(inner_bytes.getvalue()))
+
+        index = artifacts._get_runner_index(tarball_path)
+        extracted = artifacts.extract_runner(
+            tarball_path,
+            "py-genlayer",
+            runner_hash,
+        )
+
+        assert index["py-genlayer"] == [current_path]
+        assert (extracted / "runner.json").read_text() == '{"Seq": []}'
+
     def test_extract_runner_falls_back_to_legacy_prefix(self, monkeypatch, tmp_path):
         monkeypatch.setattr(artifacts, "CACHE_DIR", tmp_path / "cache")
         runner_hash = "1jb45aa8legacyhash"
@@ -343,12 +396,44 @@ class TestRunnerPathLookup:
             lambda _path: {
                 "py-genlayer": [
                     "executor/v0.2.17/legacy-runners/py-genlayer/1j/legacy.tar",
-                    "runners/py-genlayer/9b/current.tar",
+                    "runners/py-genlayer/5j/current.zip",
                 ]
             },
         )
 
-        assert artifacts.find_latest_runner(tarball_path, "py-genlayer") == "9bcurrent"
+        assert artifacts.find_latest_runner(tarball_path, "py-genlayer") == "5jcurrent"
+
+    def test_rejects_zip_members_outside_the_runner_cache(self, tmp_path):
+        inner_bytes = io.BytesIO()
+        with zipfile.ZipFile(inner_bytes, mode="w") as inner_zip:
+            inner_zip.writestr("../escape.py", "unsafe")
+
+        with zipfile.ZipFile(io.BytesIO(inner_bytes.getvalue())) as inner_zip:
+            try:
+                artifacts._extract_zip(inner_zip, tmp_path / "runner")
+            except ValueError as error:
+                assert "unsafe runner zip member" in str(error)
+            else:
+                raise AssertionError("expected unsafe zip member to be rejected")
+
+    def test_missing_runner_lists_supported_current_and_legacy_paths(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(artifacts, "_get_runner_index", lambda _path: {})
+
+        try:
+            artifacts._find_runner_archive_path(
+                tmp_path / "bundle.tar.xz",
+                "py-genlayer",
+                "5jmissing",
+            )
+        except FileNotFoundError as error:
+            message = str(error)
+            assert "runners/py-genlayer/5j/missing.zip" in message
+            assert "runners/py-genlayer/5j/missing.tar" in message
+            assert "executor/*/legacy-runners/py-genlayer/5j/missing.tar" in message
+        else:
+            raise AssertionError("expected the missing runner to be rejected")
 
 
 class TestCacheRepositoryNamespacing:
@@ -383,8 +468,10 @@ class TestCacheRepositoryNamespacing:
         monkeypatch.setattr(artifacts, "get_cache_dir", lambda: tmp_path)
         monkeypatch.delenv(artifacts.GENVM_VERSION_ENV, raising=False)
         (tmp_path / "genvm-universal-v0.3.0-rc3.tar.xz").write_bytes(b"")
-        monkeypatch.setattr(artifacts, "get_latest_version", lambda: "v0.6.0-rc1")
-        assert artifacts.resolve_version() == "v0.6.0-rc1"
+        monkeypatch.setattr(
+            artifacts, "_fetch_latest_release_version", lambda: "v0.6.0-rc3"
+        )
+        assert artifacts.resolve_version() == "v0.6.0-rc3"
 
 
 class TestCleanCacheNamespacing:
