@@ -6,6 +6,8 @@ import json
 import tarfile
 import urllib.error
 
+import pytest
+
 from genvm_linter.validate import artifacts
 
 
@@ -445,6 +447,16 @@ class TestSafeExtractall:
             t.add(src, arcname="hello.txt")
         return tar_path
 
+    @pytest.mark.skipif(
+        not hasattr(tarfile, "data_filter"),
+        reason=(
+            "this interpreter's tarfile predates PEP 706 filter= support; "
+            "forcing _EXTRACTALL_SUPPORTS_FILTER=True here would call the "
+            "real extractall(filter=...) and hit the exact TypeError this "
+            "fix exists to prevent — see test_falls_back_without_filter_"
+            "on_old_interpreters for that path instead"
+        ),
+    )
     def test_extracts_with_filter_when_supported(self, tmp_path, monkeypatch):
         monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", True)
         tar_path = self._make_tar(tmp_path)
@@ -468,3 +480,53 @@ class TestSafeExtractall:
             artifacts._safe_extractall(t, out_dir)  # would raise TypeError pre-fix
 
         assert (out_dir / "hello.txt").read_text() == "hi"
+
+    def _make_malicious_tar(self, tmp_path, member_name, payload=b"pwned"):
+        """A tarball with one member whose name is crafted to escape the
+        extraction directory (classic Zip Slip / CWE-22 payload)."""
+        tar_path = tmp_path / "evil.tar"
+        with tarfile.open(tar_path, "w") as t:
+            info = tarfile.TarInfo(member_name)
+            info.size = len(payload)
+            t.addfile(info, io.BytesIO(payload))
+        return tar_path
+
+    def test_legacy_fallback_rejects_path_traversal_member(self, tmp_path, monkeypatch):
+        """A crafted '../' member name must not let the legacy (no-filter)
+        fallback write outside the destination directory."""
+        monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", False)
+        tar_path = self._make_malicious_tar(tmp_path, "../escaped.txt")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        with tarfile.open(tar_path) as t:
+            with pytest.raises(ValueError, match="escapes destination directory"):
+                artifacts._safe_extractall(t, out_dir)
+
+        assert not (tmp_path / "escaped.txt").exists()
+
+    def test_legacy_fallback_rejects_absolute_path_member(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", False)
+        escape_target = tmp_path / "outside" / "escaped.txt"
+        tar_path = self._make_malicious_tar(tmp_path, str(escape_target))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        with tarfile.open(tar_path) as t:
+            with pytest.raises(ValueError, match="escapes destination directory"):
+                artifacts._safe_extractall(t, out_dir)
+
+        assert not escape_target.exists()
+
+    def test_legacy_fallback_still_extracts_safe_nested_members(self, tmp_path, monkeypatch):
+        """The traversal guard must not reject ordinary nested paths."""
+        monkeypatch.setattr(artifacts, "_EXTRACTALL_SUPPORTS_FILTER", False)
+        tar_path = self._make_malicious_tar(tmp_path, "nested/dir/hello.txt", payload=b"hi")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        with tarfile.open(tar_path) as t:
+            artifacts._safe_extractall(t, out_dir)
+
+        assert (out_dir / "nested" / "dir" / "hello.txt").read_text() == "hi"
+
