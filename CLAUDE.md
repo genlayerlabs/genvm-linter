@@ -42,13 +42,14 @@ GenLayer intelligent contracts embed their SDK version in a header:
 The linter:
 1. Parses the contract header for dependency hashes
 2. Downloads `genvm-universal.tar.xz` from GitHub releases
-3. Extracts the nested tarball structure:
+3. Extracts the nested runner archives:
    ```
    genvm-universal.tar.xz
-   └── runners/py-genlayer/{hash}.tar
+   └── runners/py-genlayer/{hash}.zip
        └── runner.json  (specifies py-lib-genlayer-std version)
-   └── runners/py-lib-genlayer-std/{hash}.tar
+   └── runners/py-lib-genlayer-std/{hash}.zip
        └── src/genlayer/...
+   └── executor/{version}/legacy-runners/.../{hash}.tar
    ```
 4. Adds SDK to Python path and imports `get_schema()`
 5. Executes contract to extract ABI

@@ -1,5 +1,6 @@
 """Download and cache GenVM release artifacts."""
 
+import io
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 CACHE_DIR = Path.home() / ".cache" / "genvm-linter"
@@ -22,14 +24,44 @@ GENVM_ALLOW_PRERELEASE_ENV = "GENVM_ALLOW_PRERELEASE"
 GENVM_SOURCE_MODE_ENV = "GENVM_SOURCE_MODE"
 GENVM_PREBUILT_DIR_ENV = "GENVM_PREBUILT_DIR"
 GENVMROOT_ENV = "GENVMROOT"
-FALLBACK_VERSION = "v0.6.0-rc1"
-RUNNER_INDEX_VERSION = 2
+FALLBACK_VERSION = "v0.6.0-rc3"
+RUNNER_INDEX_VERSION = 3
+CURRENT_RUNNER_ARCHIVE_EXTENSIONS = ("zip", "tar")
 
 
 def get_cache_dir() -> Path:
     """Get the cache directory, creating if needed."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return CACHE_DIR
+
+
+def _fetch_latest_release_version() -> str | None:
+    """Fetch the newest suitable release, or None when none ships runners."""
+    req = urllib.request.Request(
+        f"{GITHUB_API_RELEASES}?per_page=100",
+        headers={
+            "User-Agent": "genvm-linter",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+    prerelease_candidate: str | None = None
+    allow_prerelease = os.environ.get(GENVM_ALLOW_PRERELEASE_ENV) == "1"
+    for release in releases:
+        if release.get("draft"):
+            continue
+        asset_names = {asset.get("name") for asset in release.get("assets", [])}
+        if not asset_names.intersection(RUNNER_BUNDLE_ASSETS):
+            continue
+        if release.get("prerelease"):
+            if allow_prerelease:
+                return release["tag_name"]
+            if prerelease_candidate is None:
+                prerelease_candidate = release["tag_name"]
+            continue
+        return release["tag_name"]
+    return prerelease_candidate
 
 
 def get_latest_version() -> str:
@@ -40,32 +72,9 @@ def get_latest_version() -> str:
     GENVM_ALLOW_PRERELEASE=1 opts into prereleases even when a stable release exists.
     """
     try:
-        req = urllib.request.Request(
-            f"{GITHUB_API_RELEASES}?per_page=100",
-            headers={
-                "User-Agent": "genvm-linter",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            releases = json.loads(response.read().decode("utf-8"))
-        prerelease_candidate: str | None = None
-        allow_prerelease = os.environ.get(GENVM_ALLOW_PRERELEASE_ENV) == "1"
-        for release in releases:
-            if release.get("draft"):
-                continue
-            asset_names = {asset.get("name") for asset in release.get("assets", [])}
-            if not asset_names.intersection(RUNNER_BUNDLE_ASSETS):
-                continue
-            if release.get("prerelease"):
-                if allow_prerelease:
-                    return release["tag_name"]
-                if prerelease_candidate is None:
-                    prerelease_candidate = release["tag_name"]
-                continue
-            return release["tag_name"]
-        if prerelease_candidate is not None:
-            return prerelease_candidate
+        latest = _fetch_latest_release_version()
+        if latest is not None:
+            return latest
         print(
             f"Warning: no release in {GENVM_REPO} ships a known runner bundle "
             f"({', '.join(RUNNER_BUNDLE_ASSETS)}); falling back to "
@@ -127,14 +136,31 @@ def list_cached_versions() -> list[str]:
 
 
 def resolve_version() -> str:
-    """GenVM version to use: GENVM_VERSION env var > newest cached > latest release."""
+    """Resolve an explicit or current GenVM release, with cache for offline use."""
     pinned = os.environ.get(GENVM_VERSION_ENV)
     if pinned:
         return pinned
+
+    try:
+        latest = _fetch_latest_release_version()
+        if latest is not None:
+            return latest
+        print(
+            f"Warning: no release in {GENVM_REPO} ships a known runner bundle; "
+            "checking the local cache",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        print(
+            f"Warning: could not resolve latest GenVM version from {GENVM_REPO} "
+            f"({exc}); checking the local cache",
+            file=sys.stderr,
+        )
+
     cached = list_cached_versions()
     if cached:
         return cached[0]
-    return get_latest_version()
+    return FALLBACK_VERSION
 
 
 def get_tarball_path(version: str) -> Path:
@@ -296,15 +322,28 @@ def list_available_versions() -> list[dict]:
 
 def hash_to_tar_path(runner_type: str, hash_val: str) -> str:
     """
-    Convert a dependency hash to the path inside genvm-universal.tar.xz.
+    Convert a dependency hash to the legacy current-layout tar path.
 
     Example:
       py-lib-genlayer-std, 0asq35p8mzlzwgxcrx5v51srnsqyj72cq7993way1vqddwxcvkq4
       -> runners/py-lib-genlayer-std/0a/sq35p8mzlzwgxcrx5v51srnsqyj72cq7993way1vqddwxcvkq4.tar
+
+    New GenVM releases use zip archives; use hash_to_runner_paths() when
+    resolving a runner from a bundle.
     """
     dir_prefix = hash_val[:2]
     file_suffix = hash_val[2:]
     return f"runners/{runner_type}/{dir_prefix}/{file_suffix}.tar"
+
+
+def hash_to_runner_paths(runner_type: str, hash_val: str) -> list[str]:
+    """Return supported current-layout paths, newest format first."""
+    dir_prefix = hash_val[:2]
+    file_suffix = hash_val[2:]
+    return [
+        f"runners/{runner_type}/{dir_prefix}/{file_suffix}.{extension}"
+        for extension in CURRENT_RUNNER_ARCHIVE_EXTENSIONS
+    ]
 
 
 def _get_bundle_runner_index(tarball_path: Path) -> dict[str, list[str]]:
@@ -322,7 +361,7 @@ def _get_bundle_runner_index(tarball_path: Path) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
     with tarfile.open(tarball_path, "r:xz") as tar:
         for m in tar.getmembers():
-            if m.name.startswith("runners/") and m.name.endswith(".tar"):
+            if m.name.startswith("runners/") and m.name.endswith((".zip", ".tar")):
                 parts = m.name.split("/")
                 if len(parts) >= 4:
                     runner_type = parts[1]
@@ -342,7 +381,10 @@ def _get_prebuilt_runner_index(root: Path) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
 
     current_root = root / "runners"
-    for runner_path in sorted(current_root.glob("*/*/*.tar")):
+    current_paths = []
+    for extension in CURRENT_RUNNER_ARCHIVE_EXTENSIONS:
+        current_paths.extend(current_root.glob(f"*/*/*.{extension}"))
+    for runner_path in sorted(current_paths):
         relative_path = runner_path.relative_to(root).as_posix()
         runner_type = relative_path.split("/")[1]
         index.setdefault(runner_type, []).append(relative_path)
@@ -363,37 +405,51 @@ def _get_runner_index(artifact_path: Path) -> dict[str, list[str]]:
     return _get_bundle_runner_index(artifact_path)
 
 
-def _runner_hash_from_tar_path(tar_member_path: str) -> str:
+def _runner_hash_from_archive_path(archive_path: str) -> str:
     """Recover a runner hash from either supported bundle member layout."""
-    parts = tar_member_path.split("/")
-    return parts[-2] + parts[-1].removesuffix(".tar")
+    parts = archive_path.split("/")
+    return parts[-2] + Path(parts[-1]).stem
 
 
-def _select_runner_tar_path(
+def _select_runner_archive_path(
     runner_paths: list[str],
     runner_type: str,
     hash_val: str,
 ) -> str:
     """Select a runner path, preferring the current layout over legacy."""
-    current_path = hash_to_tar_path(runner_type, hash_val)
-    if current_path in runner_paths:
-        return current_path
+    current_paths = hash_to_runner_paths(runner_type, hash_val)
+    for current_path in current_paths:
+        if current_path in runner_paths:
+            return current_path
 
     legacy_suffix = f"/legacy-runners/{runner_type}/{hash_val[:2]}/{hash_val[2:]}.tar"
     for runner_path in runner_paths:
         if runner_path.startswith("executor/") and runner_path.endswith(legacy_suffix):
             return runner_path
-    return current_path
+    attempted = [*current_paths, f"executor/*{legacy_suffix}"]
+    raise FileNotFoundError(
+        f"runner {runner_type}:{hash_val} not found; tried {', '.join(attempted)}"
+    )
 
 
-def _find_runner_tar_path(
+def _extract_zip(archive: zipfile.ZipFile, destination: Path) -> None:
+    """Extract a runner zip without allowing members to escape the cache dir."""
+    destination_root = destination.resolve()
+    for member in archive.infolist():
+        member_path = (destination / member.filename).resolve()
+        if member_path != destination_root and destination_root not in member_path.parents:
+            raise ValueError(f"unsafe runner zip member: {member.filename}")
+    archive.extractall(destination)
+
+
+def _find_runner_archive_path(
     artifact_path: Path,
     runner_type: str,
     hash_val: str,
 ) -> str:
     """Find a runner in either source, preferring current layout over legacy."""
     runners = _get_runner_index(artifact_path).get(runner_type, [])
-    return _select_runner_tar_path(runners, runner_type, hash_val)
+    return _select_runner_archive_path(runners, runner_type, hash_val)
 
 
 def find_latest_runner(artifact_path: Path, runner_type: str) -> str | None:
@@ -407,7 +463,7 @@ def find_latest_runner(artifact_path: Path, runner_type: str) -> str | None:
     if runners:
         current_runners = [path for path in runners if path.startswith("runners/")]
         latest = (current_runners or runners)[-1]
-        return _runner_hash_from_tar_path(latest)
+        return _runner_hash_from_archive_path(latest)
     return None
 
 
@@ -435,20 +491,31 @@ def extract_runner(artifact_path: Path, runner_type: str, hash_val: str) -> Path
     runner_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        tar_member_path = _find_runner_tar_path(artifact_path, runner_type, hash_val)
+        runner_archive_path = _find_runner_archive_path(
+            artifact_path, runner_type, hash_val
+        )
         if artifact_path.is_dir():
-            with tarfile.open(artifact_path / tar_member_path, mode="r:") as inner_tar:
-                inner_tar.extractall(runner_path, filter="data")
+            archive_path = artifact_path / runner_archive_path
+            if archive_path.suffix == ".zip":
+                with zipfile.ZipFile(archive_path) as inner_zip:
+                    _extract_zip(inner_zip, runner_path)
+            else:
+                with tarfile.open(archive_path, mode="r:") as inner_tar:
+                    inner_tar.extractall(runner_path, filter="data")
         else:
             with tarfile.open(artifact_path, "r:xz") as outer_tar:
-                inner_tar_member = outer_tar.getmember(tar_member_path)
+                inner_tar_member = outer_tar.getmember(runner_archive_path)
                 inner_tar_file = outer_tar.extractfile(inner_tar_member)
 
                 if inner_tar_file is None:
-                    raise RuntimeError(f"Could not extract {tar_member_path}")
+                    raise RuntimeError(f"Could not extract {runner_archive_path}")
 
-                with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
-                    inner_tar.extractall(runner_path, filter="data")
+                if Path(runner_archive_path).suffix == ".zip":
+                    with zipfile.ZipFile(io.BytesIO(inner_tar_file.read())) as inner_zip:
+                        _extract_zip(inner_zip, runner_path)
+                else:
+                    with tarfile.open(fileobj=inner_tar_file, mode="r:") as inner_tar:
+                        inner_tar.extractall(runner_path, filter="data")
 
         return runner_path
     except Exception:
