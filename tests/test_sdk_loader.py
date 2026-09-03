@@ -316,3 +316,97 @@ def test_generate_stubs_unpacks_extract_sdk_paths(monkeypatch, tmp_path):
         raise AssertionError(f"stub generation still mishandles the tuple: {exc}") from exc
     except Exception:
         pass
+
+
+# ======== sys.path / sys.modules leak regression tests ========
+
+
+def test_load_sdk_restores_sys_path(monkeypatch, tmp_path):
+    """load_sdk must not leave SDK paths in sys.path.
+
+    Each call inserted SDK src dirs at the front of sys.path and never removed
+    them, so a long-running process (VS Code extension, programmatic loops)
+    accumulated one set of paths per validation -- unbounded growth, and a prior
+    SDK version could shadow the current one. After the fix, sys.path is
+    restored to its original length once the import completes.
+    """
+    _clear_genlayer_modules(monkeypatch)
+
+    sdk_dir = tmp_path / "sdk"
+    (sdk_dir / "src" / "genlayer").mkdir(parents=True)
+    (sdk_dir / "src" / "genlayer" / "__init__.py").write_text("")
+
+    # parse_contract_header reads the contract file, so it must exist.
+    contract = tmp_path / "contract.py"
+    contract.write_text('# { "Depends": "py-genlayer:test" }\n')
+
+    monkeypatch.setattr(sdk_loader, "resolve_artifact_source", lambda **k: tmp_path)
+    monkeypatch.setattr(
+        sdk_loader,
+        "extract_sdk_paths",
+        lambda *a, **k: ([sdk_dir], []),
+    )
+    monkeypatch.setattr(sdk_loader, "setup_wasi_mocks", lambda: None)
+    # Stub the schema import so the test focuses on path handling, not the
+    # real SDK import (which _clear_genlayer_modules would invalidate anyway).
+    monkeypatch.setattr(sdk_loader, "_import_get_schema", lambda: (lambda cls: {}))
+
+    path_before = list(sys.path)
+    sdk_loader.load_sdk(contract)
+    assert sys.path == path_before, "load_sdk leaked SDK paths into sys.path"
+
+
+def test_load_sdk_clears_stale_genlayer_modules(monkeypatch, tmp_path):
+    """load_sdk must evict cached genlayer.* modules before re-importing.
+
+    Python returns a module from sys.modules without consulting sys.path, so a
+    second load_sdk call with a different SDK version would silently reuse the
+    first call's modules unless they are cleared first.
+    """
+    stale = ModuleType("genlayer")
+    stale.__version__ = "stale"
+    monkeypatch.setitem(sys.modules, "genlayer", stale)
+    monkeypatch.setitem(sys.modules, "genlayer._internal", ModuleType("genlayer._internal"))
+
+    sdk_dir = tmp_path / "sdk"
+    (sdk_dir / "src" / "genlayer").mkdir(parents=True)
+    (sdk_dir / "src" / "genlayer" / "__init__.py").write_text("")
+
+    # parse_contract_header reads the contract file, so it must exist.
+    contract = tmp_path / "contract.py"
+    contract.write_text('# { "Depends": "py-genlayer:test" }\n')
+
+    monkeypatch.setattr(sdk_loader, "resolve_artifact_source", lambda **k: tmp_path)
+    monkeypatch.setattr(
+        sdk_loader,
+        "extract_sdk_paths",
+        lambda *a, **k: ([sdk_dir], []),
+    )
+    monkeypatch.setattr(sdk_loader, "setup_wasi_mocks", lambda: None)
+    monkeypatch.setattr(sdk_loader, "_import_get_schema", lambda: (lambda cls: {}))
+
+    sdk_loader.load_sdk(contract)
+
+    # The stale "genlayer" entry must have been removed so a fresh import could
+    # take effect; it must not still be the `stale` object.
+    assert sys.modules.get("genlayer") is not stale, (
+        "load_sdk did not clear the stale genlayer module from sys.modules"
+    )
+
+
+def test_load_contract_module_does_not_leak_sys_modules(monkeypatch, tmp_path):
+    """load_contract_module must remove its 'contract' sys.modules entry.
+
+    A leftover entry leaks the previous contract's code into the next
+    validate_contract call in the same process and can shadow the new module.
+    """
+    contract = tmp_path / "contract_a.py"
+    contract.write_text("VALUE = 'a'\n")
+
+    module = sdk_loader.load_contract_module(contract)
+    assert module.VALUE == "a"
+    # The entry must be gone after load returns.
+    assert "contract" not in sys.modules, (
+        "load_contract_module leaked a 'contract' entry into sys.modules"
+    )
+
