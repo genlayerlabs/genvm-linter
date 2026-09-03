@@ -37,11 +37,16 @@ not the release gate.
 
 ## Promotion and Release
 
-When an integration train is ready, open a promotion PR from the integration
-branch to the matching stable branch, for example `v0.11-dev` to `v0.11`.
+Release candidates are cut directly from the active integration branch with a
+version such as `0.11.1-rc.1`. The matching tag (`v0.11.1-rc.1`) publishes the
+candidate without promoting unfinished train work to the stable branch.
+
+When an integration train is ready for a final release, open a promotion PR
+from the integration branch to the matching stable branch, for example
+`v0.11-dev` to `v0.11`.
 
 That promotion PR is the release-readiness gate and must pass required
-cross-repo `E2E Tests`. The actual package release is cut from the stable branch
+cross-repo `E2E Tests`. The final package release is cut from the stable branch
 using a version tag after the stable branch is ready.
 
 ## `main`
