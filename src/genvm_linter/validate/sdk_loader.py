@@ -173,26 +173,73 @@ def load_sdk(
     # 5. Extract SDK paths from the selected source
     sdk_paths, upgrade_notes = extract_sdk_paths(artifact_path, dependencies)
 
-    # 6. Add SDK to path
-    for path in reversed(sdk_paths):
-        src_path = path / "src" if (path / "src").exists() else path
-        sys.path.insert(0, str(src_path))
+    # 6. Add SDK to path.  SDK paths are inserted at the FRONT of sys.path so the
+    #    contract resolves to the right SDK version.  Without cleanup this leaks:
+    #    repeated validations (long-running VS Code extension, programmatic loops)
+    #    accumulate stale paths, and a prior SDK version can shadow the current one.
+    #    We remove any stale genlayer.* modules so the new paths are actually
+    #    consulted, then drop the paths we inserted once the import completes.
+    #    The returned get_schema callable keeps the imported modules alive via its
+    #    globals, so clearing sys.modules here is safe.  The contract loaded later
+    #    by load_contract_module reuses the cached genlayer modules, so sys.path no
+    #    longer needs the SDK entries.
+    _inserted: list[str] = []
+    _clear_genlayer_modules()
+    try:
+        for path in reversed(sdk_paths):
+            src_path = path / "src" if (path / "src").exists() else path
+            sys.path.insert(0, str(src_path))
+            _inserted.append(str(src_path))
 
-    # 7. Import get_schema from the current SDK, falling back to the legacy layout.
-    get_schema = _import_get_schema()
+        # 7. Import get_schema from the current SDK, falling back to the legacy layout.
+        get_schema = _import_get_schema()
+    finally:
+        # Remove only the paths we added (they sit at the front); leave any
+        # pre-existing entries intact.
+        for p in _inserted:
+            if sys.path and sys.path[0] == p:
+                sys.path.pop(0)
 
     return get_schema, upgrade_notes
 
 
+def _clear_genlayer_modules() -> None:
+    """Remove cached ``genlayer`` and ``genlayer.*`` modules from ``sys.modules``.
+
+    Python's import system returns a cached module from ``sys.modules`` without
+    consulting ``sys.path``.  After the first ``load_sdk`` call the genlayer SDK
+    modules live in the cache; a second call with a different SDK version (or a
+    re-downloaded tarball) would silently reuse the stale modules unless they are
+    evicted here first.  numpy and other third-party modules are left untouched.
+    """
+    for name in list(sys.modules):
+        if name == "genlayer" or name.startswith("genlayer."):
+            del sys.modules[name]
+
+
 def load_contract_module(contract_path: Path):
-    """Load contract as a Python module."""
+    """Load contract as a Python module.
+
+    The module is registered under the name ``"contract"`` in ``sys.modules``
+    while it executes so that ``import contract`` references inside the contract
+    file resolve to itself.  It is removed again afterwards: a stale entry would
+    leak the previous contract's code (and its class/imports) into the next
+    ``validate_contract`` call in the same process, silently returning the wrong
+    schema for every contract validated after the first.
+    """
     spec = importlib.util.spec_from_file_location("contract", contract_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load contract: {contract_path}")
 
     module = importlib.util.module_from_spec(spec)
     sys.modules["contract"] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        # Drop the cache entry so a later call (different contract) is not
+        # shadowed by this one.  `module` is returned to the caller, which keeps
+        # it alive independently of sys.modules.
+        sys.modules.pop("contract", None)
     return module
 
 
