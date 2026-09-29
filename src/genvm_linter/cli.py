@@ -17,6 +17,7 @@ from .output import (
 )
 from .validate import validate_contract
 from .validate.artifacts import (
+    _cached_bundle_version,
     clean_cache,
     download_artifacts,
     get_latest_version,
@@ -357,7 +358,9 @@ def setup(version, contract, json_output):
             extra_paths.append(str(src_path))
 
         if json_output:
-            resolved_version = version or tarball_path.name.replace("genvm-universal-", "").replace(".tar.xz", "")
+            # The cache is repo-namespaced, so the version is not recoverable by
+            # stripping a fixed prefix off the filename.
+            resolved_version = version or _cached_bundle_version(tarball_path)
             click.echo(json.dumps({
                 "ok": True,
                 "extraPaths": extra_paths,
