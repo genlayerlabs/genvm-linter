@@ -146,7 +146,7 @@ def _get_suggestion(code: str) -> Optional[str]:
         "E011": "Move each contract class to its own file.",
         "E012": "Remove @gl.public decorator from __init__ method.",
         "E013": "Rename method to not start with '__' or make it private.",
-        "E014": "Add @allow_storage decorator to the class.",
+        "E014": "Add @gl.storage.allow to the class (@allow_storage on legacy contracts).",
         "E015": "Use u256 or i256 instead of int for storage fields.",
         "E016": "Use DynArray instead of list, TreeMap instead of dict.",
         "E017": "Array size must be a positive integer Literal.",

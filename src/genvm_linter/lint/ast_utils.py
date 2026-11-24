@@ -12,6 +12,18 @@ CONTRACT_BASE_NAMES = frozenset(
     }
 )
 
+# Decorators that make a class usable in contract storage. ``allow_storage`` is
+# the legacy spelling; ``storage.allow`` is the current SDK API.
+ALLOW_STORAGE_DECORATOR_NAMES = frozenset(
+    {
+        "allow_storage",
+        "gl.allow_storage",
+        "storage.allow",
+        "gl.storage.allow",
+        "genlayer.storage.allow",
+    }
+)
+
 
 def dotted_name(node: ast.expr) -> str | None:
     """Return a dotted name for Name/Attribute expressions."""

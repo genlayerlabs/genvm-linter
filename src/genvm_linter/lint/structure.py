@@ -4,7 +4,7 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ast_utils import is_contract_subclass
+from .ast_utils import ALLOW_STORAGE_DECORATOR_NAMES, is_contract_subclass
 
 
 @dataclass
@@ -267,7 +267,7 @@ class ContractStructureChecker(ast.NodeVisitor):
 
 
 class StorageClassChecker(ast.NodeVisitor):
-    """Check classes used in storage for @allow_storage decorator."""
+    """Check classes used in storage for the storage-allow decorator."""
 
     def __init__(self):
         self.warnings: list[StructureWarning] = []
@@ -276,10 +276,10 @@ class StorageClassChecker(ast.NodeVisitor):
         self.class_locations: dict[str, tuple[int, int]] = {}  # class -> (line, col)
 
     def visit_ClassDef(self, node: ast.ClassDef):
-        # Check if has @allow_storage decorator
+        # Check if it has @gl.storage.allow (or the legacy @allow_storage)
         for dec in node.decorator_list:
             dec_name = self._decorator_to_string(dec)
-            if dec_name in ("allow_storage", "gl.allow_storage"):
+            if dec_name in ALLOW_STORAGE_DECORATOR_NAMES:
                 self.allow_storage_classes.add(node.name)
                 break
 
@@ -342,7 +342,10 @@ class StorageClassChecker(ast.NodeVisitor):
                     line, col = self.class_locations[cls_name]
                     warnings.append(StructureWarning(
                         code="E014",
-                        msg=f"Class '{cls_name}' used in storage needs @allow_storage decorator",
+                        msg=(
+                            f"Class '{cls_name}' used in storage needs "
+                            "@gl.storage.allow (or @allow_storage on legacy contracts)"
+                        ),
                         line=line,
                         col=col,
                     ))
